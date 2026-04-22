@@ -1,9 +1,11 @@
-# uct_engine -- Path-Reuse Regularized UCT for Discrete Configuration Search
+# AG-UCT (AgentUCT)
+
+Path-reuse regularized UCT for discrete configuration search in agentic workflows and RAG pipelines.
 
 A lightweight, extensible UCT (Upper Confidence bounds applied to Trees) search
-engine for discrete compositional search spaces. Implements the
+engine for discrete compositional search spaces. Implements the  **AG-UCT (AgentUCT)**, a
 **Path-Reuse Regularized UCT** algorithm for RAG pipeline configuration search
-with history-dependent, reuse-aware cost regularization.
+with history-dependent, reuse-aware cost regularization based on WTB and Agent Git https://github.com/KataDavidXD/WTB-AgenticWorkflowTestBench.
 
 **Zero external dependencies** -- stdlib only (`dataclasses`, `typing`, `abc`,
 `math`, `random`, `logging`).
@@ -102,6 +104,7 @@ Score_t(s, a) = Q_hat(s, a)
 ```
 
 Where:
+
 - `Q_hat(s, a)` -- empirical value estimate (exploitation)
 - `c_uct * sqrt(...)` -- UCT exploration bonus
 - `lambda_t * delta_C_hat(...)` -- marginal cost penalty (the regularizer)
@@ -212,22 +215,24 @@ uct_engine/
 
 ### Mapping from paper to code
 
-| Paper notation | Code location | Description |
-|----------------|--------------|-------------|
-| `s = (o_1, ..., o_d)` | `SearchState` protocol | Partial config (selected config) |
-| `child(s, a)` | `SearchState.child(action)` | State extension |
-| `Path_t` | `SearchContext.materialized_keys` | Reuse graph |
-| `delta_C_t(s, a)` | `CostModel.marginal_cost()` | History-dependent marginal cost |
-| `lambda_t` | `CostAwareUCTScorer.lambda_t` | Cost regularization weight |
-| `c_uct` | `UCTSearchEngine.exploration_constant` | Exploration coefficient |
-| `N(s)` | `TreeNode.visit_count` | Parent visit count |
-| `N(s,a)` | `TreeNode.children[a].visit_count` | Child visit count |
-| `Q_hat(s,a)` | `TreeNode.children[a].q_value` | Empirical mean reward |
-| `R_hat(x, z)` | `BenchmarkClusterResult.reward` | Per-cluster reward |
-| `J_hat(x)` | `EvaluationResult.reward` | Weighted aggregate reward |
-| `B_tot` | `UCTSearchEngine.search(max_cost=...)` | Total compute budget |
-| `Z = {z_1, ..., z_K}` | `BenchmarkClusterResult.cluster_id` | Benchmark clusters |
-| `x_best` | `SearchResult.best_state` | Best observed config by reward |
+
+| Paper notation        | Code location                          | Description                      |
+| --------------------- | -------------------------------------- | -------------------------------- |
+| `s = (o_1, ..., o_d)` | `SearchState` protocol                 | Partial config (selected config) |
+| `child(s, a)`         | `SearchState.child(action)`            | State extension                  |
+| `Path_t`              | `SearchContext.materialized_keys`      | Reuse graph                      |
+| `delta_C_t(s, a)`     | `CostModel.marginal_cost()`            | History-dependent marginal cost  |
+| `lambda_t`            | `CostAwareUCTScorer.lambda_t`          | Cost regularization weight       |
+| `c_uct`               | `UCTSearchEngine.exploration_constant` | Exploration coefficient          |
+| `N(s)`                | `TreeNode.visit_count`                 | Parent visit count               |
+| `N(s,a)`              | `TreeNode.children[a].visit_count`     | Child visit count                |
+| `Q_hat(s,a)`          | `TreeNode.children[a].q_value`         | Empirical mean reward            |
+| `R_hat(x, z)`         | `BenchmarkClusterResult.reward`        | Per-cluster reward               |
+| `J_hat(x)`            | `EvaluationResult.reward`              | Weighted aggregate reward        |
+| `B_tot`               | `UCTSearchEngine.search(max_cost=...)` | Total compute budget             |
+| `Z = {z_1, ..., z_K}` | `BenchmarkClusterResult.cluster_id`    | Benchmark clusters               |
+| `x_best`              | `SearchResult.best_state`              | Best observed config by reward   |
+
 
 ### Data flow per iteration
 
@@ -243,12 +248,14 @@ uct_engine/
 
 ### Extension points
 
-| Interface | What to swap | When |
-|-----------|-------------|------|
-| `SearchState` (Protocol) | Different search space representation | New domain (not RAG) |
-| `ScoreFunction` (ABC) | Different acquisition function | Alternative tree policy |
-| `Evaluator` (ABC) | Different evaluation backend | Real benchmarks vs. mock |
-| `CostModel` (ABC) | Different cost structure | Per-node cost, no cost, etc. |
+
+| Interface                | What to swap                          | When                         |
+| ------------------------ | ------------------------------------- | ---------------------------- |
+| `SearchState` (Protocol) | Different search space representation | New domain (not RAG)         |
+| `ScoreFunction` (ABC)    | Different acquisition function        | Alternative tree policy      |
+| `Evaluator` (ABC)        | Different evaluation backend          | Real benchmarks vs. mock     |
+| `CostModel` (ABC)        | Different cost structure              | Per-node cost, no cost, etc. |
+
 
 `SearchState` is a Protocol (duck-typed, no inheritance required). The other
 three are ABCs with a single abstract method each.
@@ -313,11 +320,11 @@ delta_C_t(s,a;z) = sum_m c_m * 1[(pi_{1:m}, z) not in Path_t]
 `ReuseAwareCostModel` simplifies this to a binary estimate:
 
 - **base_cost** when the child path key is NOT in Path_t -- represents the
-  expected full execution cost of evaluating a new, uncached configuration.
-  In practice, calibrate this to the average per-config evaluation cost in
-  your domain (e.g. seconds of compute, API cost, etc.).
+expected full execution cost of evaluating a new, uncached configuration.
+In practice, calibrate this to the average per-config evaluation cost in
+your domain (e.g. seconds of compute, API cost, etc.).
 - **0.0** when the child path key IS in Path_t -- the prefix is cached and
-  can be restored at zero cost via AgentGit.
+can be restored at zero cost via AgentGit.
 
 For production, subclass `ReuseAwareCostModel` and override `marginal_cost()`
 to compute real per-node, per-cluster costs from your backend. The scalar
@@ -370,11 +377,13 @@ print(f"Cost: {result.total_cost:.2f}")
 
 The included example searches over a 3-slot RAG pipeline:
 
-| Slot | Options | Paper notation |
-|------|---------|---------------|
-| retriever | bm25, dense | O_1 |
-| reranker | none, bge | O_2 |
-| topk | 5, 10 | O_3 |
+
+| Slot      | Options     | Paper notation |
+| --------- | ----------- | -------------- |
+| retriever | bm25, dense | O_1            |
+| reranker  | none, bge   | O_2            |
+| topk      | 5, 10       | O_3            |
+
 
 The `MockBenchmarkEvaluator` simulates 3 benchmark clusters (Z = {cluster_A,
 cluster_B, cluster_C}) with per-cluster noise and heterogeneous execution costs.
@@ -434,26 +443,22 @@ python -m unittest discover -s uct_engine/tests -v
 ## Adapting for the real RAG paper setting
 
 1. **Evaluator**: Replace `MockBenchmarkEvaluator` with a real evaluator that
-   runs configurations through WTB on actual benchmark clusters. Each cluster
+  runs configurations through WTB on actual benchmark clusters. Each cluster
    evaluation should return a `BenchmarkClusterResult` with real
    `materialized_keys` from AgentGit's content-addressable state hashing.
-
 2. **SearchState**: Replace `RAGSearchState` slots with your real component
-   option lists (embedding model, chunking strategy, retriever, reranker,
+  option lists (embedding model, chunking strategy, retriever, reranker,
    top-k, generation mode, etc.).
-
 3. **CostModel**: Subclass `ReuseAwareCostModel` to compute real per-node,
-   per-cluster marginal costs from AgentGit, matching the paper's
+  per-cluster marginal costs from AgentGit, matching the paper's
    delta_C_t(s,a;z) = sum_m c_m * 1[(pi_{1:m}, z) not in Path_t].
-
 4. **SearchContext**: `context.materialized_keys` maps directly to Path_t.
-   The evaluator populates `materialized_keys` in each cluster result;
+  The evaluator populates `materialized_keys` in each cluster result;
    the engine harvests them automatically.
-
 5. **lambda_t schedule**: `CostAwareUCTScorer.lambda_t` maps to the paper's
-   lambda_t. For a dynamic schedule {lambda_t}, subclass `CostAwareUCTScorer`
+  lambda_t. For a dynamic schedule {lambda_t}, subclass `CostAwareUCTScorer`
    and read the current step from `context.total_evaluations`.
-
 6. **Budget mode**: Pass `max_cost=B_tot` to `engine.search()` to use the
-   paper's cost-budget termination (Algorithm 1 line 5) instead of or in
+  paper's cost-budget termination (Algorithm 1 line 5) instead of or in
    addition to iteration-based termination.
+
