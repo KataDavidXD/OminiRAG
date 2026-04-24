@@ -1,7 +1,7 @@
 """Integration tests: cross-project component swap builds and runs a graph.
 
-Verifies that components defined for one project (STORM) can be injected into
-another project's pipeline (LongRAG) and the combined graph executes correctly.
+Verifies that components from LightRAG and Self-RAG can be injected into
+LongRAG's pipeline and the combined graph executes correctly.
 """
 
 from __future__ import annotations
@@ -40,21 +40,22 @@ class LongRAGStyleRetrieval:
         ]
 
 
-class StormStyleRetrieval:
-    """Simulates STORM's web-search retrieval."""
+class LightRAGStyleRetrieval:
+    """Simulates LightRAG's KG-based retrieval returning multiple chunks."""
 
-    NAME = "storm-web"
+    NAME = "lightrag-hybrid"
 
     def retrieve(self, queries: list[str], top_k: int = 10) -> list[RetrievalResult]:
-        return [
-            RetrievalResult(
-                source_id=f"storm://{i}",
-                content=f"STORM web result for {q}",
-                score=0.95,
-                title=f"STORM-WebDoc-{i}",
-            )
-            for i, q in enumerate(queries[:top_k])
-        ]
+        results = []
+        for i, q in enumerate(queries):
+            results.append(RetrievalResult(
+                source_id=f"lightrag-chunk://{i}",
+                content=f"KG-enriched context for {q}",
+                score=0.9 - i * 0.05,
+                title=f"LightRAG-KG-Doc-{i}",
+                metadata={"retrieval_mode": "hybrid", "has_kg": True},
+            ))
+        return results[:top_k]
 
 
 class LongRAGStyleGeneration:
@@ -74,10 +75,10 @@ class LongRAGStyleGeneration:
         )
 
 
-class StormStyleGeneration:
-    """Simulates STORM's section writer."""
+class LightRAGStyleGeneration:
+    """Simulates LightRAG's detailed answer generation."""
 
-    NAME = "storm-writer"
+    NAME = "lightrag-answer"
 
     def generate(
         self,
@@ -86,8 +87,9 @@ class StormStyleGeneration:
         instruction: str = "",
     ) -> GenerationResult:
         return GenerationResult(
-            output=f"[STORM] article section for '{query}'",
+            output=f"[LightRAG] detailed answer for '{query}'",
             citations=[r.source_id for r in context],
+            metadata={"framework": "lightrag"},
         )
 
 
@@ -147,11 +149,11 @@ class TestDefaultPipeline:
 
 
 class TestCrossProjectSwapRetrieval:
-    """Swap LongRAG's retrieval with STORM's web-search retrieval."""
+    """Swap LongRAG's retrieval with LightRAG's KG retrieval."""
 
-    def test_storm_retrieval_in_longrag_pipeline(self):
+    def test_lightrag_retrieval_in_longrag_pipeline(self):
         graph = build_graph(
-            retrieval=StormStyleRetrieval(),
+            retrieval=LightRAGStyleRetrieval(),
             generation=LongRAGStyleGeneration(),
         )
         state = _run(graph.ainvoke({
@@ -162,16 +164,16 @@ class TestCrossProjectSwapRetrieval:
         }))
         gen: GenerationResult = state["generation_result"]
         assert "[LongRAG]" in gen.output
-        assert all(c.startswith("storm://") for c in gen.citations)
+        assert all(c.startswith("lightrag-chunk://") for c in gen.citations)
 
 
 class TestCrossProjectSwapGeneration:
-    """Swap LongRAG's generation with STORM's section writer."""
+    """Swap LongRAG's generation with LightRAG's generation."""
 
-    def test_storm_generation_in_longrag_pipeline(self):
+    def test_lightrag_generation_in_longrag_pipeline(self):
         graph = build_graph(
             retrieval=LongRAGStyleRetrieval(),
-            generation=StormStyleGeneration(),
+            generation=LightRAGStyleGeneration(),
         )
         state = _run(graph.ainvoke({
             "query": "Explain transformers",
@@ -180,17 +182,17 @@ class TestCrossProjectSwapGeneration:
             "test_data_name": "nq",
         }))
         gen: GenerationResult = state["generation_result"]
-        assert "[STORM]" in gen.output
+        assert "[LightRAG]" in gen.output
         assert all(c.startswith("longrag://") for c in gen.citations)
 
 
 class TestCrossProjectSwapBoth:
     """Swap both retrieval AND generation simultaneously."""
 
-    def test_both_storm_components_in_longrag(self):
+    def test_both_lightrag_components_in_longrag(self):
         graph = build_graph(
-            retrieval=StormStyleRetrieval(),
-            generation=StormStyleGeneration(),
+            retrieval=LightRAGStyleRetrieval(),
+            generation=LightRAGStyleGeneration(),
         )
         state = _run(graph.ainvoke({
             "query": "AI safety",
@@ -199,8 +201,8 @@ class TestCrossProjectSwapBoth:
             "test_data_name": "nq",
         }))
         gen: GenerationResult = state["generation_result"]
-        assert "[STORM]" in gen.output
-        assert all(c.startswith("storm://") for c in gen.citations)
+        assert "[LightRAG]" in gen.output
+        assert all(c.startswith("lightrag-chunk://") for c in gen.citations)
 
 
 class TestCustomReranking:

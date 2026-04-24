@@ -1,0 +1,23 @@
+{
+  "nodes": [
+    {"name": "Precision Agriculture", "type": "Concept", "description": "Farming management approach using GPS, sensors, and analytics for site-specific optimization.", "source_doc_ids": ["agri_precision_farming"]},
+    {"name": "Variable Rate Technology", "type": "Concept", "description": "Technology that applies inputs (fertilizer, pesticides) at variable rates across a field.", "source_doc_ids": ["agri_precision_farming"]},
+    {"name": "Crop Yield", "type": "Concept", "description": "Amount of agricultural production per unit area. Affected by soil, weather, pests, and management.", "source_doc_ids": ["agri_precision_farming"]},
+    {"name": "Soil Health", "type": "Concept", "description": "Condition of soil including pH, organic matter, microbiome diversity affecting plant growth.", "source_doc_ids": ["agri_soil_health"]},
+    {"name": "Byzantine Fault Tolerance", "type": "Concept", "description": "Ability of a distributed system to reach consensus despite Byzantine (arbitrary) failures.", "source_doc_ids": ["cs_distributed_systems"]},
+    {"name": "Byzantine Generals Problem", "type": "Concept", "description": "Fundamental problem in distributed computing formulated by Lamport, Shostak, Pease (1982).", "source_doc_ids": ["cs_distributed_systems"]},
+    {"name": "PBFT", "type": "Concept", "description": "Practical Byzantine Fault Tolerance by Castro and Liskov (1999). Three-phase consensus protocol.", "source_doc_ids": ["cs_pbft"]},
+    {"name": "Defense of Necessity", "type": "Concept", "description": "Criminal law defense arguing the act prevented a greater harm. Requires imminent threat, no alternative, proportionality.", "source_doc_ids": ["legal_necessity_defense"]},
+    {"name": "Duress", "type": "Concept", "description": "Criminal defense involving coercion by another person, distinct from necessity.", "source_doc_ids": ["legal_duress_vs_necessity"]},
+    {"name": "Model Penal Code", "type": "Concept", "description": "Statutory text by the American Law Institute. Section 3.02 codifies the choice of evils defense.", "source_doc_ids": ["legal_duress_vs_necessity"]}
+  ],
+  "edges": [
+    {"source": "Precision Agriculture", "target": "Crop Yield", "keywords": ["optimization", "factors"], "description": "Precision agriculture aims to maximize crop yield through data-driven management.", "source_doc_ids": ["agri_precision_farming"]},
+    {"source": "Precision Agriculture", "target": "Variable Rate Technology", "keywords": ["tool", "application"], "description": "VRT is a key technology in precision agriculture.", "source_doc_ids": ["agri_precision_farming"]},
+    {"source": "Soil Health", "target": "Crop Yield", "keywords": ["affects", "productivity"], "description": "Soil health directly impacts crop productivity and yield.", "source_doc_ids": ["agri_soil_health"]},
+    {"source": "Byzantine Generals Problem", "target": "Byzantine Fault Tolerance", "keywords": ["foundation", "consensus"], "description": "BFT solutions address the Byzantine Generals Problem.", "source_doc_ids": ["cs_distributed_systems"]},
+    {"source": "PBFT", "target": "Byzantine Fault Tolerance", "keywords": ["implementation", "practical"], "description": "PBFT is a practical implementation of Byzantine Fault Tolerance.", "source_doc_ids": ["cs_pbft"]},
+    {"source": "Defense of Necessity", "target": "Duress", "keywords": ["distinction", "comparison"], "description": "Necessity and duress are related but distinct defenses in criminal law.", "source_doc_ids": ["legal_duress_vs_necessity"]},
+    {"source": "Model Penal Code", "target": "Defense of Necessity", "keywords": ["codifies", "section 3.02"], "description": "MPC Section 3.02 codifies the choice of evils / necessity defense.", "source_doc_ids": ["legal_duress_vs_necessity"]}
+  ]
+}

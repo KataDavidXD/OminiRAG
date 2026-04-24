@@ -1,0 +1,7 @@
+[
+  {"key": ["Scott Derrickson"], "value": "American director, screenwriter and producer born July 16, 1966. Best known for The Exorcism of Emily Rose, Sinister, and Doctor Strange.", "source_chunk_ids": ["chunk_hotpot_001"], "source_doc_ids": ["wiki_scott_derrickson"]},
+  {"key": ["Ed Wood"], "value": "American filmmaker Edward Davis Wood Jr. (1924-1978). Widely regarded as one of the worst directors of all time.", "source_chunk_ids": ["chunk_hotpot_002"], "source_doc_ids": ["wiki_ed_wood"]},
+  {"key": ["Sela Ward"], "value": "American actress who portrayed Nora Combative in 2005. Served as Deputy Director of the Domestic Policy Council.", "source_chunk_ids": ["chunk_hotpot_003"], "source_doc_ids": ["wiki_sela_ward"]},
+  {"key": ["Arthur's Magazine"], "value": "American literary periodical published 1844-1846 in Philadelphia. Founded by Timothy Shay Arthur.", "source_chunk_ids": ["chunk_hotpot_004"], "source_doc_ids": ["wiki_arthurs_magazine"]},
+  {"key": ["First for Women"], "value": "Woman's magazine started in 1989 by Bauer Media Group in the USA.", "source_chunk_ids": ["chunk_hotpot_005"], "source_doc_ids": ["wiki_first_for_women"]}
+]

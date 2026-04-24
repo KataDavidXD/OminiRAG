@@ -1,0 +1,32 @@
+{
+  "chunk_ultra_agri_001": {
+    "content": "Precision agriculture relies on GPS, sensors, and data analytics to optimize field-level management. Key factors affecting crop yield include soil moisture, nutrient levels (nitrogen, phosphorus, potassium), pest pressure, weather patterns, and planting density. Variable rate technology (VRT) allows farmers to apply inputs at site-specific rates.",
+    "doc_ids": ["agri_precision_farming"],
+    "chunk_order_index": 0
+  },
+  "chunk_ultra_agri_002": {
+    "content": "Soil health monitoring involves regular testing of pH, organic matter content, and microbiome diversity. Healthy soil ecosystems support better root development and nutrient uptake, directly impacting crop productivity. Cover cropping and reduced tillage are recommended practices.",
+    "doc_ids": ["agri_soil_health"],
+    "chunk_order_index": 0
+  },
+  "chunk_ultra_cs_001": {
+    "content": "Byzantine fault tolerance (BFT) addresses the problem of achieving consensus in distributed systems where some nodes may fail or act maliciously. The original Byzantine Generals Problem was formulated by Lamport, Shostak, and Pease in 1982. A system with n nodes can tolerate up to f Byzantine faults if n >= 3f + 1.",
+    "doc_ids": ["cs_distributed_systems"],
+    "chunk_order_index": 0
+  },
+  "chunk_ultra_cs_002": {
+    "content": "Practical Byzantine Fault Tolerance (PBFT), proposed by Castro and Liskov in 1999, reduced the complexity of BFT to polynomial time. PBFT operates in three phases: pre-prepare, prepare, and commit. It is widely used in permissioned blockchain networks.",
+    "doc_ids": ["cs_pbft"],
+    "chunk_order_index": 0
+  },
+  "chunk_ultra_legal_001": {
+    "content": "The defense of necessity in criminal law allows a defendant to argue that their criminal act was committed to prevent a greater harm. Requirements typically include: (1) imminent threat of harm, (2) no reasonable legal alternative, (3) proportionality between the harm avoided and the harm caused, (4) the defendant did not create the threatening situation.",
+    "doc_ids": ["legal_necessity_defense"],
+    "chunk_order_index": 0
+  },
+  "chunk_ultra_legal_002": {
+    "content": "Courts distinguish between the defense of necessity and duress. While necessity involves a choice of evils from natural or circumstantial forces, duress involves coercion by another person. The Model Penal Code Section 3.02 codifies the choice of evils defense, requiring that the harm sought to be avoided is greater than that sought to be prevented by the law defining the offense.",
+    "doc_ids": ["legal_duress_vs_necessity"],
+    "chunk_order_index": 0
+  }
+}

@@ -1,0 +1,8 @@
+[
+  {"key": ["Precision Agriculture"], "value": "Farming management using GPS, sensors, and analytics. Factors: soil moisture, nutrients, pests, weather, planting density.", "source_chunk_ids": ["chunk_ultra_agri_001"], "source_doc_ids": ["agri_precision_farming"]},
+  {"key": ["Soil Health"], "value": "Soil condition including pH, organic matter, microbiome. Affects root development and nutrient uptake.", "source_chunk_ids": ["chunk_ultra_agri_002"], "source_doc_ids": ["agri_soil_health"]},
+  {"key": ["Byzantine Fault Tolerance"], "value": "Consensus despite Byzantine failures. Requires n >= 3f+1 nodes. Formulated by Lamport, Shostak, Pease (1982).", "source_chunk_ids": ["chunk_ultra_cs_001"], "source_doc_ids": ["cs_distributed_systems"]},
+  {"key": ["PBFT"], "value": "Practical BFT by Castro & Liskov (1999). Three phases: pre-prepare, prepare, commit. Used in permissioned blockchains.", "source_chunk_ids": ["chunk_ultra_cs_002"], "source_doc_ids": ["cs_pbft"]},
+  {"key": ["Defense of Necessity"], "value": "Criminal defense: act prevented greater harm. Requirements: imminent threat, no legal alternative, proportionality, not self-created.", "source_chunk_ids": ["chunk_ultra_legal_001"], "source_doc_ids": ["legal_necessity_defense"]},
+  {"key": ["Model Penal Code"], "value": "ALI statutory text. Section 3.02 codifies choice of evils defense.", "source_chunk_ids": ["chunk_ultra_legal_002"], "source_doc_ids": ["legal_duress_vs_necessity"]}
+]

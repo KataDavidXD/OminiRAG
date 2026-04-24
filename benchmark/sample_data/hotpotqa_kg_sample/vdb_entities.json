@@ -1,0 +1,9 @@
+{
+  "_note": "Pre-computed entity name embeddings. Placeholder short vectors for structural validation.",
+  "Scott Derrickson": [0.20, -0.15, 0.50, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Ed Wood": [0.22, -0.13, 0.48, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "United States": [0.01, 0.01, 0.01, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Sela Ward": [0.10, 0.30, -0.10, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Arthur's Magazine": [-0.28, 0.10, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "First for Women": [-0.22, 0.12, 0.28, 0.0, 0.0, 0.0, 0.0, 0.0]
+}

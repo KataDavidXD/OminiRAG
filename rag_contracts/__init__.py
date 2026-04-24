@@ -4,6 +4,13 @@ Defines the 6 replaceable component protocols and their shared data types.
 Pipeline stages: Chunking -> Embedding -> Query -> Retrieval -> Reranking -> Generation
 """
 
+from .common_components import (
+    ALCEDocRetrieval,
+    DuckDuckGoRetrieval,
+    FallbackRetrieval,
+    LLMRetrieval,
+    SimpleLLMGeneration,
+)
 from .identity import (
     IdentityChunking,
     IdentityEmbedding,
@@ -34,4 +41,10 @@ __all__ = [
     "IdentityEmbedding",
     "IdentityReranking",
     "IdentityGeneration",
+    # Common reusable components
+    "LLMRetrieval",
+    "DuckDuckGoRetrieval",
+    "FallbackRetrieval",
+    "ALCEDocRetrieval",
+    "SimpleLLMGeneration",
 ]

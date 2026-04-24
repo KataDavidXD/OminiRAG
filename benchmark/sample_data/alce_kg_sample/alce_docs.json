@@ -1,0 +1,19 @@
+{
+  "_note": "ALCE pre-retrieved documents per query. Each query has N segmented documents with title + text. This is the natural input shape for Self-RAG per-passage scoring.",
+  "alce_asqa_1": [
+    {"title": "Tokyo", "text": "Tokyo, officially the Tokyo Metropolis, is the capital of Japan. It is located at the head of Tokyo Bay. The population of the 23 special wards that form the core of Tokyo is about 14 million."},
+    {"title": "History of Tokyo", "text": "Tokyo became the capital of Japan in 1868, when Emperor Meiji moved the imperial court from Kyoto to Edo, which was renamed Tokyo (meaning 'Eastern Capital')."},
+    {"title": "Greater Tokyo Area", "text": "The Greater Tokyo Area is the most populous metropolitan area in the world, with a population of over 37 million people as of 2020."}
+  ],
+  "alce_qampari_1": [
+    {"title": "Colosseum", "text": "The Colosseum, also known as the Flavian Amphitheatre, is an oval amphitheatre in the centre of Rome, Italy. It was inscribed as a UNESCO World Heritage Site in 1980."},
+    {"title": "Venice", "text": "Venice and its Lagoon were inscribed as a UNESCO World Heritage Site in 1987. Venice is built on more than 100 small islands in a lagoon in the Adriatic Sea."},
+    {"title": "Florence", "text": "The Historic Centre of Florence was declared a UNESCO World Heritage Site in 1982. It contains a wealth of art and architecture from the Renaissance period."},
+    {"title": "Pompeii", "text": "Pompeii is an ancient Roman city near Naples. The archaeological areas of Pompeii, Herculaneum, and Torre Annunziata were collectively designated a UNESCO World Heritage Site in 1997."}
+  ],
+  "alce_eli5_1": [
+    {"title": "Photosynthesis", "text": "Photosynthesis is a biological process used by plants, algae, and some bacteria to convert light energy into chemical energy stored in glucose. The overall equation is: 6CO2 + 6H2O + light energy -> C6H12O6 + 6O2."},
+    {"title": "Chloroplast", "text": "Chloroplasts are organelles found in plant cells that conduct photosynthesis. They contain chlorophyll, a green pigment that absorbs light energy primarily in the blue and red wavelengths."},
+    {"title": "Oxygen cycle", "text": "Photosynthesis is the primary source of atmospheric oxygen. Without photosynthesis, oxygen levels would decline and most aerobic life forms would not survive. It also forms the base of virtually all food chains on Earth."}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "_note": "Pre-computed chunk embeddings. Placeholder short vectors for structural validation.",
+  "chunk_ultra_agri_001": [0.31, -0.12, 0.45, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "chunk_ultra_agri_002": [0.28, -0.08, 0.40, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "chunk_ultra_cs_001": [-0.20, 0.40, 0.10, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "chunk_ultra_cs_002": [-0.18, 0.42, 0.12, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "chunk_ultra_legal_001": [0.05, -0.30, -0.25, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "chunk_ultra_legal_002": [0.07, -0.28, -0.22, 0.0, 0.0, 0.0, 0.0, 0.0]
+}

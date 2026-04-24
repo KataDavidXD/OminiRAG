@@ -1,0 +1,9 @@
+{
+  "_note": "Pre-computed relation keyword embeddings. Placeholder short vectors for structural validation.",
+  "Scott Derrickson->United States": [0.10, -0.10, 0.30, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Ed Wood->United States": [0.12, -0.08, 0.28, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Scott Derrickson->Doctor Strange": [0.18, -0.20, 0.55, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Scott Derrickson->Sinister": [0.16, -0.18, 0.52, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Sela Ward->Deputy Director": [0.09, 0.35, -0.05, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Timothy Shay Arthur->Arthur's Magazine": [-0.25, 0.08, 0.22, 0.0, 0.0, 0.0, 0.0, 0.0]
+}

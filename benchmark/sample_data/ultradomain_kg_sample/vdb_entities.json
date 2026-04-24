@@ -1,0 +1,10 @@
+{
+  "_note": "Pre-computed entity name embeddings. Placeholder short vectors for structural validation.",
+  "Precision Agriculture": [0.35, -0.10, 0.50, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Crop Yield": [0.30, -0.05, 0.48, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Soil Health": [0.25, -0.03, 0.35, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Byzantine Fault Tolerance": [-0.22, 0.45, 0.15, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "PBFT": [-0.20, 0.43, 0.13, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Defense of Necessity": [0.06, -0.32, -0.28, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "Model Penal Code": [0.04, -0.30, -0.20, 0.0, 0.0, 0.0, 0.0, 0.0]
+}

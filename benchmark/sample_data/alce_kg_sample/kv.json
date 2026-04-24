@@ -1,0 +1,7 @@
+[
+  {"key": ["Tokyo"], "value": "Capital of Japan since 1868. Population ~14 million city proper, ~37 million in Greater Tokyo Area.", "source_chunk_ids": [], "source_doc_ids": ["alce_asqa_1_doc0", "alce_asqa_1_doc1"]},
+  {"key": ["Photosynthesis"], "value": "Converts CO2 + H2O + light -> glucose + O2. Primary source of atmospheric oxygen. Base of food chains.", "source_chunk_ids": [], "source_doc_ids": ["alce_eli5_1_doc0", "alce_eli5_1_doc2"]},
+  {"key": ["Colosseum"], "value": "Flavian Amphitheatre in Rome. UNESCO World Heritage Site since 1980.", "source_chunk_ids": [], "source_doc_ids": ["alce_qampari_1_doc0"]},
+  {"key": ["Venice"], "value": "Italian city on islands in the Adriatic. UNESCO World Heritage Site since 1987.", "source_chunk_ids": [], "source_doc_ids": ["alce_qampari_1_doc1"]},
+  {"key": ["Florence"], "value": "Historic Centre is a UNESCO World Heritage Site since 1982. Renaissance art and architecture.", "source_chunk_ids": [], "source_doc_ids": ["alce_qampari_1_doc2"]}
+]

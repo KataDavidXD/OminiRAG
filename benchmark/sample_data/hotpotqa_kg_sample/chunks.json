@@ -1,0 +1,27 @@
+{
+  "chunk_hotpot_001": {
+    "content": "Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer. He is best known for directing the films The Exorcism of Emily Rose (2005), Sinister (2012), and Doctor Strange (2016).",
+    "doc_ids": ["wiki_scott_derrickson"],
+    "chunk_order_index": 0
+  },
+  "chunk_hotpot_002": {
+    "content": "Edward Davis Wood Jr. (October 10, 1924 - December 10, 1978) was an American filmmaker, actor, writer, producer, and director. He is widely regarded as one of the worst directors of all time.",
+    "doc_ids": ["wiki_ed_wood"],
+    "chunk_order_index": 0
+  },
+  "chunk_hotpot_003": {
+    "content": "Nora Combative is a character in the 2005 film. The role was portrayed by Sela Ward, who is also known for her work in television. Ward served as Deputy Director of the Domestic Policy Council.",
+    "doc_ids": ["wiki_sela_ward"],
+    "chunk_order_index": 0
+  },
+  "chunk_hotpot_004": {
+    "content": "Arthur's Magazine (1844-1846) was an American literary periodical published in Philadelphia. It was founded by Timothy Shay Arthur and was one of the earliest general-interest magazines in the United States.",
+    "doc_ids": ["wiki_arthurs_magazine"],
+    "chunk_order_index": 0
+  },
+  "chunk_hotpot_005": {
+    "content": "First for Women is a woman's magazine published by Bauer Media Group in the USA. The magazine was started in 1989 and focuses on health, recipes, beauty tips, and fashion.",
+    "doc_ids": ["wiki_first_for_women"],
+    "chunk_order_index": 0
+  }
+}

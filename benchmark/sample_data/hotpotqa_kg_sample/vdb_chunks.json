@@ -1,0 +1,8 @@
+{
+  "_note": "Pre-computed chunk embeddings (768-dim Contriever/ada-002). In production these are dense vectors; here we store placeholder unit vectors for structural validation.",
+  "chunk_hotpot_001": [0.15, -0.23, 0.44, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "chunk_hotpot_002": [0.17, -0.21, 0.42, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "chunk_hotpot_003": [0.08, 0.33, -0.12, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "chunk_hotpot_004": [-0.30, 0.11, 0.28, 0.0, 0.0, 0.0, 0.0, 0.0],
+  "chunk_hotpot_005": [-0.25, 0.14, 0.30, 0.0, 0.0, 0.0, 0.0, 0.0]
+}

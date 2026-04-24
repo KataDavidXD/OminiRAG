@@ -1,0 +1,22 @@
+{
+  "nodes": [
+    {"name": "Scott Derrickson", "type": "Person", "description": "American director, screenwriter and producer born July 16, 1966.", "source_doc_ids": ["wiki_scott_derrickson"]},
+    {"name": "Ed Wood", "type": "Person", "description": "American filmmaker Edward Davis Wood Jr. (1924-1978), widely regarded as one of the worst directors.", "source_doc_ids": ["wiki_ed_wood"]},
+    {"name": "United States", "type": "Location", "description": "Country in North America. Nationality: American.", "source_doc_ids": ["wiki_scott_derrickson", "wiki_ed_wood"]},
+    {"name": "Doctor Strange", "type": "Content", "description": "2016 Marvel superhero film directed by Scott Derrickson.", "source_doc_ids": ["wiki_scott_derrickson"]},
+    {"name": "Sinister", "type": "Content", "description": "2012 horror film directed by Scott Derrickson.", "source_doc_ids": ["wiki_scott_derrickson"]},
+    {"name": "Sela Ward", "type": "Person", "description": "American actress who portrayed Nora Combative in the 2005 film. Served as Deputy Director of the Domestic Policy Council.", "source_doc_ids": ["wiki_sela_ward"]},
+    {"name": "Deputy Director of the Domestic Policy Council", "type": "Concept", "description": "US government position held by Sela Ward.", "source_doc_ids": ["wiki_sela_ward"]},
+    {"name": "Arthur's Magazine", "type": "Content", "description": "American literary periodical published 1844-1846 in Philadelphia, founded by Timothy Shay Arthur.", "source_doc_ids": ["wiki_arthurs_magazine"]},
+    {"name": "First for Women", "type": "Content", "description": "Woman's magazine started in 1989 by Bauer Media Group.", "source_doc_ids": ["wiki_first_for_women"]},
+    {"name": "Timothy Shay Arthur", "type": "Person", "description": "Founder of Arthur's Magazine.", "source_doc_ids": ["wiki_arthurs_magazine"]}
+  ],
+  "edges": [
+    {"source": "Scott Derrickson", "target": "United States", "keywords": ["nationality", "American"], "description": "Scott Derrickson is American.", "source_doc_ids": ["wiki_scott_derrickson"]},
+    {"source": "Ed Wood", "target": "United States", "keywords": ["nationality", "American"], "description": "Ed Wood was American.", "source_doc_ids": ["wiki_ed_wood"]},
+    {"source": "Scott Derrickson", "target": "Doctor Strange", "keywords": ["directed", "filmmaker"], "description": "Scott Derrickson directed Doctor Strange (2016).", "source_doc_ids": ["wiki_scott_derrickson"]},
+    {"source": "Scott Derrickson", "target": "Sinister", "keywords": ["directed", "horror"], "description": "Scott Derrickson directed Sinister (2012).", "source_doc_ids": ["wiki_scott_derrickson"]},
+    {"source": "Sela Ward", "target": "Deputy Director of the Domestic Policy Council", "keywords": ["government", "position"], "description": "Sela Ward held the position of Deputy Director of the Domestic Policy Council.", "source_doc_ids": ["wiki_sela_ward"]},
+    {"source": "Timothy Shay Arthur", "target": "Arthur's Magazine", "keywords": ["founded", "publisher"], "description": "Timothy Shay Arthur founded Arthur's Magazine in 1844.", "source_doc_ids": ["wiki_arthurs_magazine"]}
+  ]
+}

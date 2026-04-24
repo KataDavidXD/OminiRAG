@@ -1,0 +1,18 @@
+{
+  "_note": "Optional mini KG built from ALCE source documents. Demonstrates LightRAG retrieval on ALCE corpus.",
+  "nodes": [
+    {"name": "Tokyo", "type": "Location", "description": "Capital of Japan since 1868. Population ~14 million (city proper).", "source_doc_ids": ["alce_asqa_1_doc0", "alce_asqa_1_doc1"]},
+    {"name": "Emperor Meiji", "type": "Person", "description": "Japanese emperor who moved the capital from Kyoto to Tokyo in 1868.", "source_doc_ids": ["alce_asqa_1_doc1"]},
+    {"name": "Photosynthesis", "type": "Concept", "description": "Biological process converting light energy to glucose using CO2 and H2O.", "source_doc_ids": ["alce_eli5_1_doc0"]},
+    {"name": "Chloroplast", "type": "Concept", "description": "Plant cell organelle containing chlorophyll that conducts photosynthesis.", "source_doc_ids": ["alce_eli5_1_doc1"]},
+    {"name": "Colosseum", "type": "Location", "description": "Oval amphitheatre in Rome. UNESCO World Heritage Site since 1980.", "source_doc_ids": ["alce_qampari_1_doc0"]},
+    {"name": "Venice", "type": "Location", "description": "Italian city built on islands. UNESCO World Heritage Site since 1987.", "source_doc_ids": ["alce_qampari_1_doc1"]},
+    {"name": "Florence", "type": "Location", "description": "Italian city. Historic Centre is a UNESCO World Heritage Site since 1982.", "source_doc_ids": ["alce_qampari_1_doc2"]}
+  ],
+  "edges": [
+    {"source": "Emperor Meiji", "target": "Tokyo", "keywords": ["capital", "moved", "1868"], "description": "Emperor Meiji moved the capital to Tokyo in 1868.", "source_doc_ids": ["alce_asqa_1_doc1"]},
+    {"source": "Chloroplast", "target": "Photosynthesis", "keywords": ["conducts", "organelle"], "description": "Chloroplasts are the organelles where photosynthesis occurs.", "source_doc_ids": ["alce_eli5_1_doc1"]},
+    {"source": "Colosseum", "target": "Venice", "keywords": ["UNESCO", "Italy", "heritage"], "description": "Both are UNESCO World Heritage Sites in Italy.", "source_doc_ids": ["alce_qampari_1_doc0", "alce_qampari_1_doc1"]},
+    {"source": "Venice", "target": "Florence", "keywords": ["UNESCO", "Italy", "heritage"], "description": "Both are UNESCO World Heritage Sites in Italy.", "source_doc_ids": ["alce_qampari_1_doc1", "alce_qampari_1_doc2"]}
+  ]
+}
