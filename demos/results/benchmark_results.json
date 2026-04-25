@@ -1,0 +1,70 @@
+{
+  "model": "gpt-4o-mini",
+  "base_url": "https://rtekkxiz.bja.sealos.run/v1",
+  "budget": 20,
+  "seed": 42,
+  "results": [
+    {
+      "benchmark": "hotpotqa",
+      "n": 20,
+      "avg_em": 40.0,
+      "avg_f1": 51.166666666666664,
+      "elapsed": 45.7653694152832,
+      "llm_calls": 20,
+      "tokens": 16106,
+      "per_stratum": {
+        "bridge_hard": {
+          "n": 16,
+          "f1": 51.45833333333333
+        },
+        "comparison_hard": {
+          "n": 4,
+          "f1": 50.0
+        }
+      }
+    },
+    {
+      "benchmark": "alce",
+      "subset": "asqa",
+      "n": 20,
+      "avg_f1": 6.055983541999455,
+      "avg_em": 0.0,
+      "avg_str_em": 37.083333333333336,
+      "avg_length": 2.45,
+      "elapsed": 40.982248067855835,
+      "llm_calls": 20,
+      "tokens": 15765
+    },
+    {
+      "benchmark": "ultradomain",
+      "n": 20,
+      "avg_comp": 2.15,
+      "avg_div": 1.55,
+      "avg_emp": 2.1,
+      "avg_length": 24.1,
+      "elapsed": 94.09951138496399,
+      "llm_calls": 40,
+      "tokens": 20655,
+      "per_domain": {
+        "legal": {
+          "n": 6,
+          "comp": 1.83,
+          "div": 1.33,
+          "emp": 1.67
+        },
+        "cs": {
+          "n": 7,
+          "comp": 2.0,
+          "div": 1.43,
+          "emp": 2.0
+        },
+        "physics": {
+          "n": 7,
+          "comp": 2.57,
+          "div": 1.86,
+          "emp": 2.57
+        }
+      }
+    }
+  ]
+}

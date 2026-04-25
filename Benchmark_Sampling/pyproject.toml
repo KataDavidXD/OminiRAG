@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bsamp"
+version = "0.1.0"
+description = "Research-grade stratified / Neyman / MH sampling for RAG benchmark evaluation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+wtb = ["wtb", "langgraph"]
+ray = ["ray"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["bsamp"]

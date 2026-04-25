@@ -370,11 +370,19 @@ def build_pipeline_from_config(
 def evaluate_config_real(
     choices: tuple[str, ...],
     benchmark: str = "hotpotqa",
+    frozen_sample: list | None = None,
 ) -> float:
     """Build a real pipeline from config, run on sample data, return score.
 
     This is the bridge between AG-UCT and real rag_contracts evaluation.
     Returns a normalized reward in [0, 1].
+
+    Parameters
+    ----------
+    frozen_sample:
+        Optional list of ``BenchmarkItem`` pre-drawn via ``SamplingEngine``.
+        When provided, items are converted to eval dicts on-the-fly instead
+        of loading from ``sample_data/``.
     """
     try:
         components = build_pipeline_from_config(choices, benchmark)
@@ -384,6 +392,9 @@ def evaluate_config_real(
     generation = components.get("generation")
     if generation is None:
         return DEFAULT_REWARD
+
+    if frozen_sample is not None:
+        return _evaluate_frozen(frozen_sample, benchmark, generation)
 
     try:
         if benchmark == "hotpotqa":
@@ -430,6 +441,100 @@ def evaluate_config_real(
         pass
 
     return DEFAULT_REWARD
+
+
+def _evaluate_frozen(frozen_sample: list, benchmark: str, generation) -> float:
+    """Evaluate a frozen BenchmarkItem sample against a real generation component."""
+    try:
+        if benchmark == "hotpotqa":
+            from benchmark.hotpotqa_adapter import HotpotQABenchmarkAdapter
+            eval_items = []
+            for bitem in frozen_sample:
+                p = bitem.payload
+                chunks = {}
+                for idx, (title, sents) in enumerate(
+                    zip(p.get("context_titles", []), p.get("context_sentences", []))
+                ):
+                    chunks[f"c{idx}"] = {"content": f"[{title}] " + " ".join(sents), "doc_ids": [title]}
+                eval_items.append({
+                    "question": p["question"], "answer": bitem.target["answer"],
+                    "query_id": bitem.item_id, "chunks": chunks,
+                })
+            adapter = HotpotQABenchmarkAdapter()
+            result = adapter.evaluate_generation(eval_items, generation)
+            return result.avg_f1 / 100.0
+
+        elif benchmark == "ultradomain":
+            from benchmark.ultradomain_adapter import UltraDomainBenchmarkAdapter
+            eval_items = []
+            for bitem in frozen_sample:
+                ctx = (bitem.payload.get("context") or "")[:3000]
+                domain = bitem.metadata.get("domain", "unknown")
+                chunks = {"c0": {"content": ctx, "doc_ids": [domain]}} if ctx else {}
+                eval_items.append({
+                    "question": bitem.payload.get("query") or "",
+                    "answer": bitem.target.get("answer") or "",
+                    "domain": domain, "query_id": bitem.item_id, "chunks": chunks,
+                })
+            adapter = UltraDomainBenchmarkAdapter()
+            result = adapter.evaluate_generation(eval_items, generation)
+            return result.avg_f1 / 100.0
+
+        elif benchmark == "alce":
+            from benchmark.alce_adapter import ALCEBenchmarkAdapter
+            eval_items = []
+            for bitem in frozen_sample:
+                eval_items.append({
+                    "question": bitem.payload["question"],
+                    "answer": bitem.target["answer"],
+                    "docs": bitem.payload.get("docs", [])[:5],
+                    "qa_pairs": bitem.target.get("qa_pairs", []),
+                    "query_id": bitem.item_id,
+                })
+            adapter = ALCEBenchmarkAdapter()
+            result = adapter.evaluate_generation(eval_items, generation)
+            return result.avg_f1 / 100.0
+
+    except Exception:
+        pass
+    return DEFAULT_REWARD
+
+
+def build_frozen_samples(budget: int = 30, seed: int = 42) -> dict[str, list]:
+    """Pre-draw a frozen sample per cluster using SamplingEngine.
+
+    Returns ``{cluster_id: list[BenchmarkItem]}``.
+    Only builds samples for clusters whose HF data is available locally.
+    """
+    import os
+    from pathlib import Path
+    from bsamp.sampling.engine import SamplingEngine
+
+    _hf = Path(os.environ.get("HF_HUB_DIR", str(Path.home() / ".cache" / "huggingface" / "hub")))
+    samples: dict[str, list] = {}
+
+    hq_root = _hf / "datasets--hotpotqa--hotpot_qa" / "snapshots" / "1908d6afbbead072334abe2965f91bd2709910ab"
+    if hq_root.exists():
+        from bsamp.sampling.adapters.hotpotqa import HotpotQAAdapter
+        adapter = HotpotQAAdapter(str(hq_root))
+        result = SamplingEngine(adapter=adapter, method="proportional", budget=budget, seed=seed).run()
+        samples["hotpotqa"] = result.items
+
+    ud_root = _hf / "datasets--TommyChien--UltraDomain" / "snapshots" / "aa8a51d523f8fc3c5a0ab90dd16b7f6b9dbb5d0d"
+    if ud_root.exists():
+        from bsamp.sampling.adapters.ultradomain import UltraDomainAdapter
+        adapter = UltraDomainAdapter(str(ud_root), target_domains=["physics", "cs", "legal"])
+        result = SamplingEngine(adapter=adapter, method="proportional", budget=budget, seed=seed).run()
+        samples["ultradomain"] = result.items
+
+    alce_root = _hf / "datasets--princeton-nlp--ALCE-data" / "snapshots" / "334fa2e7dd32040c3fef931a123c4be1a81e91a0"
+    if alce_root.exists():
+        from bsamp.sampling.adapters.alce import ALCEAdapter
+        adapter = ALCEAdapter(str(alce_root), subsets=["asqa"])
+        result = SamplingEngine(adapter=adapter, method="proportional", budget=budget, seed=seed).run()
+        samples["alce"] = result.items
+
+    return samples
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +613,8 @@ class RAGPipelineEvaluator(Evaluator):
     When ``use_real=True``, builds actual adapter instances via
     ``build_pipeline_from_config()`` and evaluates against real benchmark
     adapters with sample data.
+    When ``frozen_samples`` is provided, uses pre-drawn BenchmarkItem lists
+    instead of loading from ``sample_data/``.
 
     For each dataset cluster:
     1. Computes reward (simulated or real)
@@ -515,8 +622,10 @@ class RAGPipelineEvaluator(Evaluator):
     3. Tracks path-prefix reuse for cost optimization
     """
 
-    def __init__(self, use_real: bool = False) -> None:
+    def __init__(self, use_real: bool = False,
+                 frozen_samples: dict[str, list] | None = None) -> None:
         self.use_real = use_real
+        self.frozen_samples = frozen_samples or {}
 
     def evaluate(self, state: SearchState, context: SearchContext) -> EvaluationResult:
         assert state.is_terminal(), "evaluator expects a terminal state"
@@ -529,7 +638,8 @@ class RAGPipelineEvaluator(Evaluator):
 
         for cid in CLUSTER_IDS:
             if self.use_real:
-                reward = evaluate_config_real(choices, benchmark=cid)
+                frozen = self.frozen_samples.get(cid)
+                reward = evaluate_config_real(choices, benchmark=cid, frozen_sample=frozen)
             else:
                 reward = _compute_reward(choices) + CLUSTER_NOISE[cid]
                 for component in choices:
@@ -573,9 +683,29 @@ class RAGPipelineEvaluator(Evaluator):
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    use_real = "--real" in sys.argv
+    import argparse
+    parser = argparse.ArgumentParser(description="AG-UCT RAG pipeline search")
+    parser.add_argument("--real", action="store_true", help="Use real pipeline evaluation (sample_data)")
+    parser.add_argument("--use-hf", action="store_true",
+                        help="Use HuggingFace datasets via SamplingEngine (implies --real)")
+    parser.add_argument("--budget", type=int, default=30,
+                        help="Per-cluster sample budget when --use-hf is set (default: 30)")
+    parser.add_argument("--max-iterations", type=int, default=500)
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
 
-    evaluator = RAGPipelineEvaluator(use_real=use_real)
+    use_real = args.real or args.use_hf
+    frozen_samples: dict[str, list] | None = None
+
+    if args.use_hf:
+        print("Building frozen HF samples ...", flush=True)
+        frozen_samples = build_frozen_samples(budget=args.budget, seed=args.seed)
+        for cid, items in frozen_samples.items():
+            print(f"  {cid}: {len(items)} items", flush=True)
+        if not frozen_samples:
+            print("  WARNING: No HF datasets found locally. Falling back to sample_data.", flush=True)
+
+    evaluator = RAGPipelineEvaluator(use_real=use_real, frozen_samples=frozen_samples)
     scorer = CostAwareUCTScorer(lambda_t=0.05)
     clusters = [
         ClusterDef(cid, weight=1.0, base_cost=CLUSTER_COST[cid])
@@ -588,11 +718,11 @@ def main() -> None:
         scorer=scorer,
         cost_model=cost_model,
         exploration_constant=1.4,
-        random_seed=42,
+        random_seed=args.seed,
     )
 
     root = RAGPipelineSearchState()
-    result = engine.search(root, max_iterations=500)
+    result = engine.search(root, max_iterations=args.max_iterations)
 
     print("=" * 70, flush=True)
     print("  RAG Pipeline UCT Search Complete", flush=True)

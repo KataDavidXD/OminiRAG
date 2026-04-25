@@ -1,0 +1,39 @@
+{
+  "model": "gpt-4o-mini",
+  "base_url": "https://rtekkxiz.bja.sealos.run/v1",
+  "budget": 6,
+  "seed": 42,
+  "results": [
+    {
+      "benchmark": "ultradomain",
+      "n": 6,
+      "avg_comp": 2.3333333333333335,
+      "avg_div": 1.5,
+      "avg_emp": 2.3333333333333335,
+      "avg_length": 19.666666666666668,
+      "elapsed": 32.419917583465576,
+      "llm_calls": 12,
+      "tokens": 6296,
+      "per_domain": {
+        "cs": {
+          "n": 2,
+          "comp": 1.5,
+          "div": 1.0,
+          "emp": 1.5
+        },
+        "legal": {
+          "n": 2,
+          "comp": 2.5,
+          "div": 1.5,
+          "emp": 2.5
+        },
+        "physics": {
+          "n": 2,
+          "comp": 3.0,
+          "div": 2.0,
+          "emp": 3.0
+        }
+      }
+    }
+  ]
+}

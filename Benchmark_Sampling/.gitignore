@@ -1,0 +1,59 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# setuptools / build
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Type checkers / linters
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDE / editor (optional local config)
+.idea/
+.vscode/
+.cursor/
+
+# Local wheel / sdist drops (e.g. vendored SDK)
+*.whl
+*.tar.gz
+
+# Environment
+.env
+.env.*
+!.env.example
+
+ultradomain_samples.csv
+
+docs/
