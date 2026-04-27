@@ -334,6 +334,69 @@ def run_alce(llm: LLM, budget: int, seed: int = 42, subset: str = "asqa", genera
 
 
 # ---------------------------------------------------------------------------
+# QAMPARI
+# ---------------------------------------------------------------------------
+
+def run_qampari(llm: LLM, budget: int, seed: int = 42, generator: str = "simple") -> dict:
+    from benchmark.alce_adapter import QampariBenchmarkAdapter
+    from bsamp.sampling.adapters.alce import ALCEAdapter
+
+    _safe_print(f"\n{SEPARATOR}\n  BENCHMARK: ALCE / qampari  (list QA, Precision/Recall/F1)  generator={generator}\n{SEPARATOR}")
+    t0 = time.time()
+
+    sampled_items, sampling_result = _sample_via_engine(
+        ALCEAdapter, {"root_dir": str(ALCE_ROOT), "subsets": ["qampari"]}, budget, seed,
+    )
+    pop_size = sum(sampling_result.strata_summary.values())
+    _safe_print(f"  Population: {pop_size} items in 'qampari'  ({time.time()-t0:.1f}s)")
+    _safe_print(f"  Sampled: {len(sampled_items)} items across {len(sampling_result.strata_summary)} strata")
+
+    eval_items = [
+        {
+            "question": bitem.payload["question"],
+            "answers": [
+                qp.get("short_answers", [])
+                for qp in bitem.target.get("qa_pairs", [])
+            ],
+            "docs": bitem.payload.get("docs", [])[:5],
+            "query_id": bitem.item_id,
+        }
+        for bitem in sampled_items
+    ]
+
+    calls_before = llm.calls
+    tokens_before = llm.total_tokens
+    adapter = QampariBenchmarkAdapter()
+    gen = _build_generation(generator, llm)
+    result = adapter.evaluate_generation(eval_items, gen)
+
+    elapsed = time.time() - t0
+    _safe_print(f"\n  Avg Precision: {result.avg_precision:.1f}%   Avg Recall: {result.avg_recall:.1f}%")
+    _safe_print(f"  Avg F1:        {result.avg_f1:.1f}%   Avg F1-top5: {result.avg_f1_top5:.1f}%")
+    _safe_print(f"  Avg #preds:    {result.avg_num_preds:.1f}")
+    _safe_print(f"  LLM calls: {llm.calls - calls_before}   Tokens: {llm.total_tokens - tokens_before}   Elapsed: {elapsed:.1f}s")
+    for it in result.per_item[:3]:
+        _safe_print(f"    Q: {it['question'][:70]}")
+        _safe_print(f"      pred={it['output'][:80]!r}")
+        _safe_print(f"      P={it['precision']:.2f}  R={it['recall']:.2f}  F1={it['f1']:.2f}")
+
+    return {
+        "benchmark": "qampari",
+        "n": len(eval_items),
+        "avg_precision": result.avg_precision,
+        "avg_recall": result.avg_recall,
+        "avg_recall_top5": result.avg_recall_top5,
+        "avg_f1": result.avg_f1,
+        "avg_f1_top5": result.avg_f1_top5,
+        "avg_num_preds": result.avg_num_preds,
+        "elapsed": elapsed,
+        "llm_calls": llm.calls - calls_before,
+        "tokens": llm.total_tokens - tokens_before,
+        "sampling_estimate": _format_estimate(sampling_result),
+    }
+
+
+# ---------------------------------------------------------------------------
 # UltraDomain (FIXED)
 # ---------------------------------------------------------------------------
 
@@ -453,7 +516,10 @@ def main() -> None:
         if name == "hotpotqa":
             results.append(run_hotpotqa(llm, args.budget, args.seed, generator=args.generator))
         elif name == "alce":
-            results.append(run_alce(llm, args.budget, args.seed, subset=args.alce_subset, generator=args.generator))
+            if args.alce_subset == "qampari":
+                results.append(run_qampari(llm, args.budget, args.seed, generator=args.generator))
+            else:
+                results.append(run_alce(llm, args.budget, args.seed, subset=args.alce_subset, generator=args.generator))
         elif name == "ultradomain":
             results.append(run_ultradomain(llm, args.budget, args.seed,
                                            domains=tuple(args.ultradomain_domains),

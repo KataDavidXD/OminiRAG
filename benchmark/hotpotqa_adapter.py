@@ -3,62 +3,42 @@
 Loads HotpotQA data (from HuggingFace, KG sample, or local JSONL), runs it
 through any pipeline conforming to canonical protocols, and evaluates outputs
 using EM and token-F1 metrics (the standard HotpotQA evaluation).
+
+Scoring logic lives in ``bsamp.scoring``; this module is the thin glue
+between OminiRAG's ``Generation`` protocol and the scoring SDK.
 """
 
 from __future__ import annotations
 
-import collections
 import json
-import re
-import string
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from rag_contracts import GenerationResult, RetrievalResult
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Text normalization (HotpotQA standard)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def normalize_answer(s: str) -> str:
-    def remove_articles(text):
-        return re.sub(r"\b(a|an|the)\b", " ", text)
-
-    def white_space_fix(text):
-        return " ".join(text.split())
-
-    def remove_punc(text):
-        exclude = set(string.punctuation)
-        return "".join(ch for ch in text if ch not in exclude)
-
-    return white_space_fix(remove_articles(remove_punc(s.lower())))
+from bsamp.scoring import (
+    HotpotQAEvaluator,
+    compute_exact,
+    compute_f1,
+    normalize_answer,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Metrics
+# Re-exports kept for backward compatibility
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def compute_f1(gold: str, pred: str) -> float:
-    gold_toks = normalize_answer(gold).split()
-    pred_toks = normalize_answer(pred).split()
-
-    if not gold_toks or not pred_toks:
-        return float(gold_toks == pred_toks)
-
-    common = collections.Counter(gold_toks) & collections.Counter(pred_toks)
-    num_same = sum(common.values())
-    if num_same == 0:
-        return 0.0
-
-    precision = num_same / len(pred_toks)
-    recall = num_same / len(gold_toks)
-    return (2 * precision * recall) / (precision + recall)
-
-
-def compute_exact(gold: str, pred: str) -> int:
-    return int(normalize_answer(gold) == normalize_answer(pred))
+__all__ = [
+    "normalize_answer",
+    "compute_f1",
+    "compute_exact",
+    "load_hotpotqa_sample",
+    "load_hotpotqa_jsonl",
+    "sample_chunks_to_retrieval_results",
+    "HotpotQAEvaluationResult",
+    "HotpotQABenchmarkAdapter",
+]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -79,7 +59,7 @@ def load_hotpotqa_sample(sample_dir: str | Path) -> list[dict]:
             if line:
                 queries.append(json.loads(line))
 
-    chunks = {}
+    chunks: dict = {}
     chunks_path = sample_dir / "chunks.json"
     if chunks_path.exists():
         with open(chunks_path, encoding="utf-8") as f:
@@ -152,9 +132,8 @@ class HotpotQABenchmarkAdapter:
         generation: Any,
     ) -> HotpotQAEvaluationResult:
         """Run generation on each HotpotQA item and compute EM/F1."""
-        per_item = []
-        em_scores = []
-        f1_scores = []
+        evaluator = HotpotQAEvaluator()
+        scored_items: list[dict] = []
 
         for item in data:
             question = item["question"]
@@ -165,32 +144,37 @@ class HotpotQABenchmarkAdapter:
                 query=question,
                 context=context,
             )
-
             output = gen_result.output.strip()
             answer = item.get("answer", "")
             if isinstance(answer, list):
                 answer = answer[0] if answer else ""
 
-            em = compute_exact(answer, output)
-            f1 = compute_f1(answer, output)
-
-            em_scores.append(em)
-            f1_scores.append(f1)
-            per_item.append({
-                "question": question,
+            scored_items.append({
+                "prediction": output,
                 "answer": answer,
-                "output": output,
-                "em": em,
-                "f1": f1,
+                "question": question,
                 "query_id": item.get("query_id", ""),
-                "citations": gen_result.citations,
+                "_citations": gen_result.citations,
             })
 
-        n = len(data) or 1
+        result = evaluator.score_batch(scored_items)
+
+        per_item = []
+        for si, score_obj in zip(scored_items, result.per_item):
+            per_item.append({
+                "question": si["question"],
+                "answer": si["answer"],
+                "output": si["prediction"],
+                "em": score_obj.metrics["em"],
+                "f1": score_obj.metrics["f1"],
+                "query_id": si["query_id"],
+                "citations": si["_citations"],
+            })
+
         return HotpotQAEvaluationResult(
-            avg_em=100 * sum(em_scores) / n,
-            avg_f1=100 * sum(f1_scores) / n,
-            num_items=len(data),
+            avg_em=result.aggregate["avg_em"],
+            avg_f1=result.aggregate["avg_f1"],
+            num_items=result.num_items,
             per_item=per_item,
         )
 
@@ -199,15 +183,11 @@ class HotpotQABenchmarkAdapter:
         data: list[dict],
         graph: Any,
     ) -> HotpotQAEvaluationResult:
-        """Run an entire LangGraph pipeline per item and compute EM/F1.
-
-        The pipeline must produce a ``generation_result`` field in its output state.
-        """
+        """Run an entire LangGraph pipeline per item and compute EM/F1."""
         import asyncio
 
-        per_item = []
-        em_scores = []
-        f1_scores = []
+        evaluator = HotpotQAEvaluator()
+        scored_items: list[dict] = []
 
         for item in data:
             question = item["question"]
@@ -226,26 +206,32 @@ class HotpotQABenchmarkAdapter:
             if isinstance(answer, list):
                 answer = answer[0] if answer else ""
 
-            em = compute_exact(answer, output)
-            f1 = compute_f1(answer, output)
-
-            em_scores.append(em)
-            f1_scores.append(f1)
-            per_item.append({
-                "question": question,
+            scored_items.append({
+                "prediction": output,
                 "answer": answer,
-                "output": output,
-                "em": em,
-                "f1": f1,
+                "question": question,
                 "query_id": item.get("query_id", ""),
-                "citations": gen_result.citations,
+                "_citations": gen_result.citations,
             })
 
-        n = len(data) or 1
+        result = evaluator.score_batch(scored_items)
+
+        per_item = []
+        for si, score_obj in zip(scored_items, result.per_item):
+            per_item.append({
+                "question": si["question"],
+                "answer": si["answer"],
+                "output": si["prediction"],
+                "em": score_obj.metrics["em"],
+                "f1": score_obj.metrics["f1"],
+                "query_id": si["query_id"],
+                "citations": si["_citations"],
+            })
+
         return HotpotQAEvaluationResult(
-            avg_em=100 * sum(em_scores) / n,
-            avg_f1=100 * sum(f1_scores) / n,
-            num_items=len(data),
+            avg_em=result.aggregate["avg_em"],
+            avg_f1=result.aggregate["avg_f1"],
+            num_items=result.num_items,
             per_item=per_item,
         )
 

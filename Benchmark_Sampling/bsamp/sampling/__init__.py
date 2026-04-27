@@ -15,6 +15,9 @@ from bsamp.sampling.adapters import BenchmarkAdapter, FreshWikiAdapter, UltraDom
 from bsamp.sampling.samplers import BaseSampler, StratifiedSampler, MetropolisHastingsSampler
 from bsamp.sampling.engine import SamplingEngine, SamplingResult
 
+# Also expose scoring subpackage for convenience
+import bsamp.scoring as scoring  # noqa: F401
+
 __all__ = [
     # Types
     "BenchmarkItem",

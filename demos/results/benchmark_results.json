@@ -1,70 +1,74 @@
 {
   "model": "gpt-4o-mini",
   "base_url": "https://rtekkxiz.bja.sealos.run/v1",
-  "budget": 20,
+  "budget": 10,
   "seed": 42,
+  "generator": "simple",
   "results": [
     {
       "benchmark": "hotpotqa",
-      "n": 20,
-      "avg_em": 40.0,
-      "avg_f1": 51.166666666666664,
-      "elapsed": 45.7653694152832,
-      "llm_calls": 20,
-      "tokens": 16106,
+      "n": 10,
+      "avg_em": 80.0,
+      "avg_f1": 86.66666666666666,
+      "elapsed": 25.19432806968689,
+      "llm_calls": 10,
+      "tokens": 7735,
       "per_stratum": {
-        "bridge_hard": {
-          "n": 16,
-          "f1": 51.45833333333333
+        "bridge::len0": {
+          "n": 9,
+          "f1": 85.18518518518518
         },
-        "comparison_hard": {
-          "n": 4,
-          "f1": 50.0
+        "comparison::len0": {
+          "n": 1,
+          "f1": 100.0
         }
-      }
+      },
+      "sampling_estimate": null
     },
     {
       "benchmark": "alce",
       "subset": "asqa",
-      "n": 20,
-      "avg_f1": 6.055983541999455,
+      "n": 10,
+      "avg_f1": 4.733811895109726,
       "avg_em": 0.0,
-      "avg_str_em": 37.083333333333336,
-      "avg_length": 2.45,
-      "elapsed": 40.982248067855835,
-      "llm_calls": 20,
-      "tokens": 15765
+      "avg_str_em": 35.833333333333336,
+      "avg_length": 1.9,
+      "elapsed": 20.02605628967285,
+      "llm_calls": 10,
+      "tokens": 7762,
+      "sampling_estimate": null
     },
     {
       "benchmark": "ultradomain",
-      "n": 20,
-      "avg_comp": 2.15,
-      "avg_div": 1.55,
-      "avg_emp": 2.1,
-      "avg_length": 24.1,
-      "elapsed": 94.09951138496399,
-      "llm_calls": 40,
-      "tokens": 20655,
+      "n": 10,
+      "avg_comp": 2.3,
+      "avg_div": 1.5,
+      "avg_emp": 2.0,
+      "avg_length": 26.4,
+      "elapsed": 45.69165778160095,
+      "llm_calls": 20,
+      "tokens": 10165,
       "per_domain": {
-        "legal": {
-          "n": 6,
-          "comp": 1.83,
+        "cs": {
+          "n": 3,
+          "comp": 1.67,
           "div": 1.33,
           "emp": 1.67
         },
-        "cs": {
-          "n": 7,
-          "comp": 2.0,
-          "div": 1.43,
-          "emp": 2.0
+        "legal": {
+          "n": 4,
+          "comp": 1.5,
+          "div": 1.25,
+          "emp": 1.25
         },
         "physics": {
-          "n": 7,
-          "comp": 2.57,
-          "div": 1.86,
-          "emp": 2.57
+          "n": 3,
+          "comp": 4.0,
+          "div": 2.0,
+          "emp": 3.33
         }
-      }
+      },
+      "sampling_estimate": null
     }
   ]
 }
