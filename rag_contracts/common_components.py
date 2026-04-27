@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .types import GenerationResult, RetrievalResult
+from .wtb_cache import attach_wtb_cache_metadata
 
 
 @dataclass
@@ -43,6 +44,10 @@ class LLMRetrieval:
                     content=ctx,
                     score=1.0,
                     title=f"LLM-generated context for: {q}",
+                    metadata=attach_wtb_cache_metadata(
+                        {"style": "llm-retrieval"},
+                        self.llm,
+                    ),
                 )
             )
         return results
@@ -154,5 +159,8 @@ class SimpleLLMGeneration:
         return GenerationResult(
             output=answer.strip(),
             citations=[r.source_id for r in context[:5]],
-            metadata={"style": "llm-reader"},
+            metadata=attach_wtb_cache_metadata(
+                {"style": "llm-reader"},
+                self.llm,
+            ),
         )

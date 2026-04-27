@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from rag_contracts import GenerationResult, IdentityReranking, RetrievalResult
+from rag_contracts import WTBCacheConfig, WTBCachedLLM, attach_wtb_cache_metadata
 
 # ---------------------------------------------------------------------------
 # Environment
@@ -42,11 +43,24 @@ load_dotenv(_env_file)
 
 class _LLM:
     def __init__(self):
+        self._wtb_llm = None
+        cache_config = WTBCacheConfig.from_env()
+        if cache_config.cache_active:
+            self._wtb_llm = WTBCachedLLM(
+                config=cache_config,
+                system_name="ominirag",
+                node_path="real_swap_demo.llm",
+            )
+            self.model = self._wtb_llm.model
+            self.client = None
+            return
+
         api_key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if not api_key:
             sys.exit("ERROR: Set LLM_API_KEY or OPENAI_API_KEY in .env")
         base_url = (
             os.environ.get("LLM_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
             or os.environ.get("OPENAI_API_BASE")
             or None
         )
@@ -54,6 +68,9 @@ class _LLM:
         self.client = OpenAI(api_key=api_key, base_url=base_url)
 
     def complete(self, system: str, user: str, **kwargs) -> str:
+        if self._wtb_llm is not None:
+            return self._wtb_llm.complete(system, user, **kwargs)
+
         resp = self.client.chat.completions.create(
             model=self.model,
             temperature=kwargs.get("temperature", 0.2),
@@ -64,6 +81,11 @@ class _LLM:
             ],
         )
         return resp.choices[0].message.content or ""
+
+    def wtb_cache_metadata(self):
+        if self._wtb_llm is None:
+            return None
+        return self._wtb_llm.wtb_cache_metadata()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -95,6 +117,10 @@ class LLMRetrieval:
                     content=ctx,
                     score=1.0,
                     title=f"LLM-generated context for: {q}",
+                    metadata=attach_wtb_cache_metadata(
+                        {"style": "llm-retrieval"},
+                        self.llm,
+                    ),
                 )
             )
         return results
@@ -193,7 +219,10 @@ class LongRAGReaderGeneration:
         return GenerationResult(
             output=answer.strip(),
             citations=[r.source_id for r in context[:5]],
-            metadata={"style": "longrag-reader"},
+            metadata=attach_wtb_cache_metadata(
+                {"style": "longrag-reader"},
+                self.llm,
+            ),
         )
 
 
@@ -228,7 +257,10 @@ class StormWriterGeneration:
         return GenerationResult(
             output=section.strip(),
             citations=[r.source_id for r in context[:6]],
-            metadata={"style": "storm-writer"},
+            metadata=attach_wtb_cache_metadata(
+                {"style": "storm-writer"},
+                self.llm,
+            ),
         )
 
 

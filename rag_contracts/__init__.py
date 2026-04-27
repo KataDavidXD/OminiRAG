@@ -20,6 +20,14 @@ from .identity import (
 )
 from .protocols import Chunking, Embedding, Generation, Query, Reranking, Retrieval
 from .types import Chunk, Document, GenerationResult, QueryContext, RetrievalResult
+from .wtb_cache import (
+    WTBCacheConfig,
+    WTBCachedLLM,
+    WTBSystemCacheStatus,
+    attach_wtb_cache_metadata,
+    get_wtb_cache_metadata,
+    inspect_swappable_system_cache_support,
+)
 
 __all__ = [
     # Data types
@@ -47,4 +55,11 @@ __all__ = [
     "FallbackRetrieval",
     "ALCEDocRetrieval",
     "SimpleLLMGeneration",
+    # WTB cache helpers
+    "WTBCacheConfig",
+    "WTBCachedLLM",
+    "WTBSystemCacheStatus",
+    "attach_wtb_cache_metadata",
+    "get_wtb_cache_metadata",
+    "inspect_swappable_system_cache_support",
 ]

@@ -29,6 +29,7 @@ from unittest.mock import MagicMock
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from rag_contracts import WTBCacheConfig
 
 # ---------------------------------------------------------------------------
 # Environment
@@ -38,11 +39,16 @@ _env_file = Path(__file__).resolve().parent / ".env"
 load_dotenv(_env_file)
 
 API_KEY = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
-BASE_URL = os.environ.get("LLM_BASE_URL") or os.environ.get("OPENAI_API_BASE", "")
+BASE_URL = (
+    os.environ.get("LLM_BASE_URL")
+    or os.environ.get("OPENAI_BASE_URL")
+    or os.environ.get("OPENAI_API_BASE", "")
+)
 MODEL = os.environ.get("DEFAULT_LLM", "gpt-4o-mini")
+CACHE_CONFIG = WTBCacheConfig.from_env()
 
-if not API_KEY:
-    sys.exit("ERROR: Set LLM_API_KEY in .env")
+if not API_KEY and not CACHE_CONFIG.cache_active:
+    sys.exit("ERROR: Set LLM_API_KEY or configure WTB_LLM_CACHE_PATH in .env")
 
 # ---------------------------------------------------------------------------
 # Fake vllm / torch so selfrag adapters can import SamplingParams
@@ -82,6 +88,8 @@ from rag_contracts import (
     LLMRetrieval,
     RetrievalResult,
     SimpleLLMGeneration,
+    WTBCachedLLM,
+    attach_wtb_cache_metadata,
 )
 
 from selfrag.constants import (
@@ -100,10 +108,25 @@ from selfrag.constants import (
 
 class _LLM:
     def __init__(self):
+        self._wtb_llm = None
+        cache_config = WTBCacheConfig.from_env()
+        if cache_config.cache_active:
+            self._wtb_llm = WTBCachedLLM(
+                config=cache_config,
+                system_name="ominirag",
+                node_path="real_selfrag_swap_demo.llm",
+            )
+            self.model = self._wtb_llm.model
+            self.client = None
+            return
+
         self.model = MODEL
         self.client = OpenAI(api_key=API_KEY, base_url=BASE_URL or None)
 
     def complete(self, system: str, user: str, **kwargs) -> str:
+        if self._wtb_llm is not None:
+            return self._wtb_llm.complete(system, user, **kwargs)
+
         resp = self.client.chat.completions.create(
             model=self.model,
             temperature=kwargs.get("temperature", 0.2),
@@ -114,6 +137,11 @@ class _LLM:
             ],
         )
         return resp.choices[0].message.content or ""
+
+    def wtb_cache_metadata(self):
+        if self._wtb_llm is None:
+            return None
+        return self._wtb_llm.wtb_cache_metadata()
 
 
 # =============================================================================
@@ -208,7 +236,18 @@ class OpenAIModel:
     """Wraps OpenAI chat completions behind the vLLM generate() interface."""
 
     def __init__(self):
-        self.client = OpenAI(api_key=API_KEY, base_url=BASE_URL or None)
+        cache_config = WTBCacheConfig.from_env()
+        self._wtb_llm = None
+        if cache_config.cache_active:
+            self._wtb_llm = WTBCachedLLM(
+                config=cache_config,
+                system_name="selfrag",
+                node_path="real_selfrag_swap_demo.selfrag_model",
+                model=MODEL,
+            )
+            self.client = None
+        else:
+            self.client = OpenAI(api_key=API_KEY, base_url=BASE_URL or None)
         self.model = MODEL
 
     def generate(
@@ -217,21 +256,34 @@ class OpenAIModel:
         results: List[_VLLMPrediction] = []
         for prompt in prompts:
             try:
-                resp = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": SELFRAG_SYSTEM},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=getattr(sampling_params, "temperature", 0.0),
-                    max_tokens=getattr(sampling_params, "max_tokens", 150),
-                )
-                text = resp.choices[0].message.content or ""
+                if self._wtb_llm is not None:
+                    text = self._wtb_llm.complete(
+                        SELFRAG_SYSTEM,
+                        prompt,
+                        temperature=getattr(sampling_params, "temperature", 0.0),
+                        max_tokens=getattr(sampling_params, "max_tokens", 150),
+                    )
+                else:
+                    resp = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": SELFRAG_SYSTEM},
+                            {"role": "user", "content": prompt},
+                        ],
+                        temperature=getattr(sampling_params, "temperature", 0.0),
+                        max_tokens=getattr(sampling_params, "max_tokens", 150),
+                    )
+                    text = resp.choices[0].message.content or ""
             except Exception as exc:
                 print(f"    [LLM ERROR] {exc}")
                 text = "[Relevant]Error generating response.[Partially supported][Utility:3]"
             results.append(_VLLMPrediction(_VLLMOutput(text)))
         return results
+
+    def wtb_cache_metadata(self):
+        if self._wtb_llm is None:
+            return None
+        return self._wtb_llm.wtb_cache_metadata()
 
 
 # =============================================================================
@@ -261,7 +313,10 @@ class LongRAGReaderGeneration:
         return GenerationResult(
             output=answer.strip(),
             citations=[r.source_id for r in context[:5]],
-            metadata={"style": "longrag-reader"},
+            metadata=attach_wtb_cache_metadata(
+                {"style": "longrag-reader"},
+                self.llm,
+            ),
         )
 
 

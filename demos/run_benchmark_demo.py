@@ -25,6 +25,8 @@ from rag_contracts import (
     IdentityReranking,
     RetrievalResult,
     SimpleLLMGeneration,
+    WTBCacheConfig,
+    WTBCachedLLM,
 )
 from benchmark.hotpotqa_adapter import (
     HotpotQABenchmarkAdapter,
@@ -48,6 +50,19 @@ class _LLM:
     """Minimal OpenAI-compatible LLM wrapper."""
 
     def __init__(self, model: str = MODEL, base_url: str = BASE_URL):
+        cache_config = WTBCacheConfig.from_env()
+        self._wtb_llm = None
+        if cache_config.cache_active:
+            self._wtb_llm = WTBCachedLLM(
+                config=cache_config,
+                system_name="benchmark_demo",
+                node_path="demos.run_benchmark_demo.llm",
+                model=model,
+            )
+            self._client = None
+            self._model = model
+            return
+
         from openai import OpenAI
 
         kwargs = {"api_key": os.environ.get("OPENAI_API_KEY", "sk-placeholder")}
@@ -59,6 +74,15 @@ class _LLM:
     def complete(
         self, system: str, user: str, temperature: float = 0.1, max_tokens: int = 300
     ) -> str:
+        if self._wtb_llm is not None:
+            return self._wtb_llm.complete(
+                system,
+                user,
+                model=self._model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=[
@@ -69,6 +93,11 @@ class _LLM:
             max_tokens=max_tokens,
         )
         return resp.choices[0].message.content or ""
+
+    def wtb_cache_metadata(self):
+        if self._wtb_llm is None:
+            return None
+        return self._wtb_llm.wtb_cache_metadata()
 
 
 class SampleDataRetrieval:
