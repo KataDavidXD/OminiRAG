@@ -6,4 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "bsamp @ file:Benchmark_Sampling",
+    "openai",
+    "python-dotenv",
 ]

@@ -145,6 +145,25 @@ class LLM:
 
     def __init__(self, model: str = MODEL, api_key: str = OPENAI_API_KEY,
                  base_url: str = OPENAI_BASE_URL):
+        from rag_contracts import WTBCacheConfig, WTBCachedLLM
+
+        cache_config = WTBCacheConfig.from_env()
+        self._wtb_llm = None
+        if cache_config.cache_active:
+            self._wtb_llm = WTBCachedLLM(
+                config=cache_config,
+                system_name="real_llm_benchmark",
+                node_path="demos.run_real_llm_benchmark.llm",
+                model=model,
+            )
+            self._client = None
+            self._model = model
+            self.calls = 0
+            self.total_tokens = 0
+            self.cache_hits = 0
+            self.cache_misses = 0
+            return
+
         from openai import OpenAI
 
         kwargs = {"api_key": api_key or "sk-placeholder"}
@@ -154,11 +173,29 @@ class LLM:
         self._model = model
         self.calls = 0
         self.total_tokens = 0
+        self.cache_hits = 0
+        self.cache_misses = 0
 
     def complete(
         self, system: str, user: str,
         temperature: float = 0.1, max_tokens: int = 300,
     ) -> str:
+        if self._wtb_llm is not None:
+            text = self._wtb_llm.complete(
+                system,
+                user,
+                model=self._model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            metadata = self._wtb_llm.wtb_cache_metadata()
+            if metadata.get("last_cache_hit"):
+                self.cache_hits += 1
+            else:
+                self.cache_misses += 1
+                self.calls += 1
+            return text
+
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=[

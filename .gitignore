@@ -11,3 +11,9 @@ wheels/
 .env
 .cursor
 .pytest_cache
+
+# WTB runtime caches
+.wtb_cache/
+.wtb_cache_control/
+*.db-shm
+*.db-wal

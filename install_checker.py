@@ -20,9 +20,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import sys
+import tempfile
 import time
 import traceback
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
@@ -83,6 +87,88 @@ def _create_linear_graph():
 
 
 _INIT_STATE: Dict[str, Any] = {"messages": [], "count": 0, "result": ""}
+
+
+# ---------------------------------------------------------------------------
+# Deterministic WTB cache probes
+# ---------------------------------------------------------------------------
+
+class _CacheCheckChatModel:
+    """Tiny fake LangChain chat model used only on cache misses."""
+
+    def __init__(self, response_prefix: str):
+        self.response_prefix = response_prefix
+        self.invoke_count = 0
+
+    def invoke(self, messages: list) -> Any:
+        self.invoke_count += 1
+        rendered = "|".join(str(message) for message in messages)
+        return SimpleNamespace(content=f"{self.response_prefix}:{rendered}")
+
+
+def _probe_ominirag_cache(
+    cache_path: str,
+    prompt: str,
+    response_prefix: str,
+    *,
+    system_name: str = "checker",
+    node_path: str = "checker.llm",
+) -> Dict[str, Any]:
+    """Run one text generation through OminiRAG's shared WTB cache helper."""
+    from rag_contracts import WTBCacheConfig, WTBCachedLLM
+    from wtb.infrastructure.llm import reset_service_cache
+
+    reset_service_cache()
+    config = WTBCacheConfig(
+        enabled=True,
+        cache_path=cache_path,
+        api_key="cache-check",
+        base_url="https://cache-check.invalid/v1",
+        text_model="cache-check-text",
+        embedding_model="cache-check-embedding",
+    )
+    llm = WTBCachedLLM(
+        config=config,
+        system_name=system_name,
+        node_path=node_path,
+    )
+    fake_model = _CacheCheckChatModel(response_prefix=response_prefix)
+    llm.service.get_chat_model = lambda **_kwargs: fake_model
+
+    text = llm.complete(
+        "cache-check-system",
+        prompt,
+        model="cache-check-text",
+        temperature=0.0,
+        max_tokens=32,
+    )
+    metadata = llm.wtb_cache_metadata()
+    stats = llm.cache_stats()
+    reset_service_cache()
+    return {
+        "cache_hit": metadata.get("last_cache_hit"),
+        "cache_key": metadata.get("last_cache_key"),
+        "text": text,
+        "fake_invocations": fake_model.invoke_count,
+        "metadata": metadata,
+        "stats": stats,
+    }
+
+
+def _ray_cache_probe(cache_path: str, prompt: str, response_prefix: str) -> Dict[str, Any]:
+    return _probe_ominirag_cache(cache_path, prompt, response_prefix)
+
+
+def _record_invariants(name: str, failures: List[str], detail: str) -> None:
+    if failures:
+        record(name, FAIL, "; ".join(failures))
+    else:
+        record(name, PASS, detail)
+
+
+def _expect(condition: bool, failures: List[str], message: str) -> None:
+    if not condition:
+        failures.append(message)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -269,8 +355,140 @@ def check_batch_rollback_and_fork() -> None:
         record("batch fork", SKIP, "blocked by rollback failure")
         traceback.print_exc()
     finally:
-        import shutil
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_cache_repeated_runs() -> None:
+    """Verify a second service/run reuses the persistent WTB cache."""
+    tmp = tempfile.mkdtemp(prefix="wtb_cache_repeat_")
+    try:
+        cache_path = str(Path(tmp) / "llm_response_cache.db")
+        first = _probe_ominirag_cache(cache_path, "repeatable prompt", "first-run")
+        second = _probe_ominirag_cache(cache_path, "repeatable prompt", "second-run")
+
+        failures: List[str] = []
+        _expect(not first["cache_hit"], failures, "first run unexpectedly reported cache_hit=True")
+        _expect(first["fake_invocations"] == 1, failures,
+                f"first run fake model calls={first['fake_invocations']} expected 1")
+        _expect(second["cache_hit"], failures, "second run did not report cache_hit=True")
+        _expect(second["fake_invocations"] == 0, failures,
+                f"second run fake model calls={second['fake_invocations']} expected 0")
+        _expect(first["cache_key"] == second["cache_key"], failures,
+                "cache_key changed across identical repeated runs")
+        _expect(first["text"] == second["text"], failures,
+                "second run did not return the cached first-run response text")
+        _expect(second["stats"]["entries"] == 1, failures,
+                f"cache entries after second run={second['stats']['entries']} expected 1")
+
+        _record_invariants(
+            "cache repeated runs",
+            failures,
+            f"key={second['cache_key'][:12]}..., entries={second['stats']['entries']}",
+        )
+    except Exception as exc:
+        record("cache repeated runs", FAIL, str(exc))
+        traceback.print_exc()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_cache_rollback_and_fork() -> None:
+    """Validate rollback/fork-style cache reuse and cache-path isolation."""
+    tmp = tempfile.mkdtemp(prefix="wtb_cache_branch_")
+    try:
+        shared_cache_path = str(Path(tmp) / "shared" / "llm_response_cache.db")
+        isolated_cache_path = str(Path(tmp) / "isolated" / "llm_response_cache.db")
+
+        base = _probe_ominirag_cache(shared_cache_path, "branch base prompt", "base")
+        rollback = _probe_ominirag_cache(shared_cache_path, "branch base prompt", "rollback")
+        fork_same = _probe_ominirag_cache(shared_cache_path, "branch base prompt", "fork-same")
+        fork_changed = _probe_ominirag_cache(shared_cache_path, "branch changed prompt", "fork-changed")
+        isolated = _probe_ominirag_cache(isolated_cache_path, "branch base prompt", "isolated")
+
+        failures: List[str] = []
+        _expect(not base["cache_hit"], failures, "base run unexpectedly hit cache")
+        _expect(rollback["cache_hit"], failures, "rollback-style rerun did not reuse cache")
+        _expect(rollback["fake_invocations"] == 0, failures,
+                f"rollback fake model calls={rollback['fake_invocations']} expected 0")
+        _expect(fork_same["cache_hit"], failures,
+                "fork with unchanged prompt/shared cache did not reuse cache")
+        _expect(fork_same["fake_invocations"] == 0, failures,
+                f"fork same-prompt fake model calls={fork_same['fake_invocations']} expected 0")
+        _expect(not fork_changed["cache_hit"], failures,
+                "fork with changed prompt unexpectedly reused the base cache entry")
+        _expect(fork_changed["fake_invocations"] == 1, failures,
+                f"fork changed-prompt fake model calls={fork_changed['fake_invocations']} expected 1")
+        _expect(base["cache_key"] != fork_changed["cache_key"], failures,
+                "changed fork prompt produced the same cache_key as the base prompt")
+        _expect(fork_changed["stats"]["entries"] == 2, failures,
+                f"shared cache entries after changed fork={fork_changed['stats']['entries']} expected 2")
+        _expect(not isolated["cache_hit"], failures,
+                "isolated cache path unexpectedly reused the shared cache entry")
+        _expect(isolated["cache_key"] == base["cache_key"], failures,
+                "isolated path changed request cache_key for identical prompt")
+        _expect(isolated["fake_invocations"] == 1, failures,
+                f"isolated cache fake model calls={isolated['fake_invocations']} expected 1")
+        _expect(isolated["stats"]["entries"] == 1, failures,
+                f"isolated cache entries={isolated['stats']['entries']} expected 1")
+
+        _record_invariants(
+            "cache rollback/fork",
+            failures,
+            "rollback_hit=True, shared_fork_hit=True, changed_fork_miss=True, isolated_path_miss=True",
+        )
+    except Exception as exc:
+        record("cache rollback/fork", FAIL, str(exc))
+        traceback.print_exc()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_ominirag_cache_helpers() -> None:
+    """Validate OminiRAG helper metadata and optional system status reporting."""
+    try:
+        from rag_contracts import (
+            WTBCacheConfig,
+            inspect_swappable_system_cache_support,
+        )
+
+        config = WTBCacheConfig(
+            enabled=True,
+            cache_path="/tmp/ominirag-wtb-check/llm_response_cache.db",
+            api_key="cache-check",
+            base_url="https://cache-check.invalid/v1",
+            text_model="cache-check-text",
+            embedding_model="cache-check-embedding",
+        )
+        env = config.as_env()
+        statuses = inspect_swappable_system_cache_support()
+
+        failures: List[str] = []
+        _expect(env["RAG_USE_WTB_CACHE"] == "true", failures,
+                "RAG_USE_WTB_CACHE env value was not true")
+        _expect(env["WTB_LLM_CACHE_PATH"].endswith("llm_response_cache.db"), failures,
+                "WTB_LLM_CACHE_PATH missing from standardized env")
+        _expect({s.name for s in statuses} == {"longrag", "storm", "selfrag"}, failures,
+                f"unexpected system status names: {[s.name for s in statuses]}")
+        _expect(all(s.cache_surface for s in statuses), failures,
+                "one or more system statuses lacked cache_surface")
+
+        ready = [s.name for s in statuses if s.importable]
+        blocked = [s.name for s in statuses if not s.importable]
+        _record_invariants(
+            "ominirag cache helpers",
+            failures,
+            f"env ok; importable={ready or 'none'}; blocked={blocked or 'none'}",
+        )
+
+        for status in statuses:
+            record(
+                f"{status.name} cache surface",
+                PASS if status.importable else SKIP,
+                status.detail,
+            )
+    except Exception as exc:
+        record("ominirag cache helpers", FAIL, str(exc))
+        traceback.print_exc()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -325,6 +543,54 @@ def check_ray_batch(skip: bool = False) -> None:
         bench.close()
     except Exception as exc:
         record("ray batch", FAIL, str(exc))
+        traceback.print_exc()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_cache_ray(skip: bool = False) -> None:
+    if skip:
+        record("cache ray reuse", SKIP, "skipped via --skip-ray")
+        return
+
+    try:
+        import ray
+    except ImportError:
+        record("cache ray reuse", SKIP, "ray not installed")
+        return
+
+    tmp = tempfile.mkdtemp(prefix="wtb_cache_ray_")
+    try:
+        if not ray.is_initialized():
+            ray.init(num_cpus=2, ignore_reinit_error=True, log_to_driver=False)
+
+        cache_path = str(Path(tmp) / "llm_response_cache.db")
+        remote_probe = ray.remote(_ray_cache_probe)
+        first = ray.get(remote_probe.remote(cache_path, "ray shared prompt", "ray-first"))
+        second = ray.get(remote_probe.remote(cache_path, "ray shared prompt", "ray-second"))
+
+        failures: List[str] = []
+        _expect(not first["cache_hit"], failures, "first Ray task unexpectedly hit cache")
+        _expect(first["fake_invocations"] == 1, failures,
+                f"first Ray task fake model calls={first['fake_invocations']} expected 1")
+        _expect(second["cache_hit"], failures,
+                "second Ray task did not reuse cache from the first Ray task")
+        _expect(second["fake_invocations"] == 0, failures,
+                f"second Ray task fake model calls={second['fake_invocations']} expected 0")
+        _expect(first["cache_key"] == second["cache_key"], failures,
+                "Ray cache_key changed across identical task inputs")
+        _expect(first["text"] == second["text"], failures,
+                "second Ray task did not return cached first-task response text")
+        _expect(second["stats"]["entries"] == 1, failures,
+                f"Ray cache entries after second task={second['stats']['entries']} expected 1")
+
+        _record_invariants(
+            "cache ray reuse",
+            failures,
+            f"key={second['cache_key'][:12]}..., entries={second['stats']['entries']}",
+        )
+    except Exception as exc:
+        record("cache ray reuse", FAIL, str(exc))
         traceback.print_exc()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -405,9 +671,16 @@ def main() -> int:
     check_batch_sequential()
     check_batch_rollback_and_fork()
 
+    # ── Cache behavior ───────────────────────────────────────────────────
+    print("\n  --- Tier 1b: WTB Cache Behavior ---\n")
+    check_cache_repeated_runs()
+    check_cache_rollback_and_fork()
+    check_ominirag_cache_helpers()
+
     # ── Tier 2: Ray ──────────────────────────────────────────────────────
     print("\n  --- Tier 2: Ray Distributed ---\n")
     check_ray_batch(skip=args.skip_ray)
+    check_cache_ray(skip=args.skip_ray)
 
     # ── Tier 3: Venv Service ─────────────────────────────────────────────
     print("\n  --- Tier 3: Venv Service ---\n")
@@ -424,6 +697,10 @@ def main() -> int:
     print("-" * 64)
 
     if failed:
+        print("\n  Failure details:")
+        for name, status, detail in results:
+            if status == FAIL:
+                print(f"  - {name}: {detail or 'no detail'}")
         print("\n  Some checks FAILED. See details above.\n")
         return 1
 
