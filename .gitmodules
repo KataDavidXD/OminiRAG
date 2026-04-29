@@ -1,0 +1,19 @@
+[submodule "A-Simplified-Core-Workflow-for-Enhancing-RAG"]
+	path = A-Simplified-Core-Workflow-for-Enhancing-RAG
+	url = https://github.com/zhejiushi-WY-ya/A-Simplified-Core-Workflow-for-Enhancing-RAG.git
+
+[submodule "longRAG_example"]
+	path = longRAG_example
+	url = https://github.com/Shaodian-Angel/longRAG_example.git
+
+[submodule "RAGentA"]
+	path = RAGentA
+	url = https://github.com/faerber-lab/RAGentA.git
+
+[submodule "self-rag_langgraph"]
+	path = self-rag_langgraph
+	url = https://github.com/Everglow-szy/self-rag_langgraph.git
+
+[submodule "benchmark/ALCE"]
+	path = benchmark/ALCE
+	url = https://github.com/princeton-nlp/ALCE.git
