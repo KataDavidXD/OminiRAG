@@ -322,6 +322,8 @@ def _read_full_hits(
 
 def _build_initial_state(config: RAGConfig, question: BenchmarkQuestion) -> Dict[str, Any]:
     """Build the LangGraph initial state dict for a (config, question) pair."""
+    from .graph_factories import _infer_frame
+
     state: Dict[str, Any] = {
         "query": question.question,
         "messages": [],
@@ -329,13 +331,14 @@ def _build_initial_state(config: RAGConfig, question: BenchmarkQuestion) -> Dict
         "result": "",
     }
 
-    if config.frame == "longrag":
+    frame = _infer_frame(config)
+    if frame == "longrag":
         state["test_data_name"] = _benchmark_to_test_data(question.cluster_id)
         state["query_id"] = question.question_id
         state["answers"] = []
         if "answer" in question.target:
             state["answers"] = [question.target["answer"]]
-    elif config.frame == "lightrag":
+    elif frame == "lightrag":
         state["mode"] = "hybrid"
 
     if question.payload.get("context"):

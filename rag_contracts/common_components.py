@@ -1,11 +1,16 @@
-"""Reusable retrieval and generation components for rag_contracts pipelines.
+"""Utility and demo components for rag_contracts pipelines.
 
-These are corpus-agnostic components that work with any pipeline:
-- LLMRetrieval: generates background context via LLM
-- DuckDuckGoRetrieval: web search via DuckDuckGo
-- FallbackRetrieval: chains a primary + fallback retrieval
-- ALCEDocRetrieval: wraps pre-retrieved ALCE documents as a Retrieval component
-- SimpleLLMGeneration: LLM-based answer extraction (LongRAG reader style)
+WARNING: These are NOT comparable retrieval methods for benchmarking.
+They serve as utility / demo / benchmark-scaffolding components:
+
+- LLMRetrieval: generates context via LLM (no corpus search -- utility/fallback)
+- DuckDuckGoRetrieval: web search (no local corpus -- utility/demo)
+- FallbackRetrieval: chains primary + fallback retrieval (combinator)
+- ALCEDocRetrieval: wraps pre-retrieved ALCE documents (benchmark scaffolding)
+- SimpleLLMGeneration: LLM-based answer extraction (generation component)
+
+For real, comparable retrieval methods (BM25, Dense, Hybrid), see
+``rag_contracts.retrieval_methods``.
 """
 
 from __future__ import annotations
@@ -19,6 +24,12 @@ from .types import GenerationResult, RetrievalResult
 @dataclass
 class LLMRetrieval:
     """Asks an LLM to produce background context for each query.
+
+    WARNING: This is a utility/fallback component, NOT a real retrieval method.
+    It fabricates context via LLM generation rather than searching a corpus.
+    Do not use for retrieval method comparisons in benchmarks.  For real
+    retrieval, see ``BM25Retrieval``, ``DenseRetrieval``, or ``HybridRetrieval``
+    in ``rag_contracts.retrieval_methods``.
 
     The ``llm`` object must have a ``complete(system, user, **kwargs)`` method
     that returns a string.  No corpus or index required.
@@ -50,7 +61,12 @@ class LLMRetrieval:
 
 @dataclass
 class DuckDuckGoRetrieval:
-    """Web search retrieval via DuckDuckGo (``ddgs`` package)."""
+    """Web search retrieval via DuckDuckGo (``ddgs`` package).
+
+    WARNING: This is a utility/demo component, NOT a real corpus retrieval
+    method.  It searches the web rather than a local corpus.  Do not use
+    for retrieval method comparisons in benchmarks.
+    """
 
     k: int = 5
 
@@ -100,9 +116,10 @@ class FallbackRetrieval:
 class ALCEDocRetrieval:
     """Wraps ALCE pre-retrieved documents as a ``rag_contracts.Retrieval``.
 
-    ALCE benchmark items provide N documents per question.  This adapter
-    converts them into ``RetrievalResult`` objects so the documents can
-    flow through any standard pipeline's retrieval slot.
+    WARNING: This is benchmark scaffolding, NOT a real retrieval method.
+    ALCE provides pre-retrieved documents per question; this adapter simply
+    converts them into ``RetrievalResult`` objects.  It performs no corpus
+    search.  Do not use for retrieval method comparisons.
 
     Usage::
 

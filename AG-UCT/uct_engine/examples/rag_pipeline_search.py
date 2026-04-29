@@ -1,12 +1,19 @@
-"""AG-UCT SearchState + Evaluator for the 3-framework RAG configuration space.
+"""AG-UCT SearchState + Evaluator for the OminiRAG 5-dimension configuration space.
 
-Search space (5 slots -- frame is explicit, not a heuristic)
--------------------------------------------------------------
-  frame      : longrag | lightrag | selfrag
-  query      : identity | lightrag_keywords
-  retrieval  : longrag_dataset | lightrag_hybrid | lightrag_chunk | lightrag_graph
-  reranking  : identity | lightrag_compress | selfrag_evidence
-  generation : longrag_reader | lightrag_answer | selfrag_generator
+Search space (5 dimensions -- aligned with RAG survey taxonomy)
+----------------------------------------------------------------
+  chunking       : standard_passage | longrag_4k | kg_extraction
+  query          : identity | lightrag_keywords
+  retrieval      : bm25 | dense_e5 | bm25_dense_hybrid | lightrag_hybrid | lightrag_graph
+  post_retrieval : identity | cross_encoder | lightrag_compress | selfrag_critique
+  generation     : longrag_reader | lightrag_answer | selfrag_generator | simple_llm
+
+Hard constraint: lightrag_hybrid / lightrag_graph require kg_extraction chunking.
+
+Framework presets:
+  LongRAG  = longrag_4k      + identity          + bm25/dense     + identity          + longrag_reader
+  LightRAG = kg_extraction   + lightrag_keywords + lightrag_hybrid + lightrag_compress + lightrag_answer
+  Self-RAG = standard_passage + identity          + dense_e5        + selfrag_critique  + selfrag_generator
 
 The evaluator uses simulated rewards by default.  When ``--real`` is passed,
 ``build_pipeline_from_config()`` maps slot values to actual adapter instances
@@ -42,96 +49,121 @@ from uct_engine import (
 
 
 # ---------------------------------------------------------------------------
-# Configuration space: 5 slots x multiple options per slot
-# Frame is an explicit slot -- not derived from component names.
+# Configuration space: 5 dimensions aligned with RAG survey taxonomy
 # ---------------------------------------------------------------------------
 
-SLOT_NAMES: list[str] = ["frame", "query", "retrieval", "reranking", "generation"]
-
-SLOT_OPTIONS: list[list[str]] = [
-    # Frame (pipeline builder)
-    ["longrag", "lightrag", "selfrag"],
-    # Query
-    ["identity", "lightrag_keywords"],
-    # Retrieval
-    ["longrag_dataset", "lightrag_hybrid", "lightrag_chunk", "lightrag_graph"],
-    # Reranking
-    ["identity", "lightrag_compress", "selfrag_evidence"],
-    # Generation
-    ["longrag_reader", "lightrag_answer", "selfrag_generator"],
+SLOT_NAMES: list[str] = [
+    "chunking", "query", "retrieval", "post_retrieval", "generation",
 ]
 
-# Backward-compatible 4-slot names for existing reward tables
-SLOT_NAMES_4: list[str] = ["query", "retrieval", "reranking", "generation"]
+SLOT_OPTIONS: list[list[str]] = [
+    # Chunking (offline corpus preparation)
+    ["standard_passage", "longrag_4k", "kg_extraction"],
+    # Query (expansion / decomposition)
+    ["identity", "lightrag_keywords"],
+    # Retrieval (real corpus search)
+    ["bm25", "dense_e5", "bm25_dense_hybrid", "lightrag_hybrid", "lightrag_graph"],
+    # Post-Retrieval (reranking / compression / critique)
+    ["identity", "cross_encoder", "lightrag_compress", "selfrag_critique"],
+    # Generation
+    ["longrag_reader", "lightrag_answer", "selfrag_generator", "simple_llm"],
+]
 
-# Component costs: approximate LLM call counts per query
+# Backward-compatible old slot names for migration
+SLOT_NAMES_OLD: list[str] = ["frame", "query", "retrieval", "reranking", "generation"]
+
+# Hard constraint: lightrag_hybrid / lightrag_graph require kg_extraction chunking
+CHUNKING_RETRIEVAL_CONSTRAINTS: dict[str, str] = {
+    "lightrag_hybrid": "kg_extraction",
+    "lightrag_graph": "kg_extraction",
+}
+
+# Component costs: approximate compute units per query
 COMPONENT_COSTS: dict[str, float] = {
-    # Frame selection (no compute, just topology choice)
-    "longrag":            0.0,
-    "lightrag":           0.0,
-    "selfrag":            0.0,
+    # Chunking (offline, amortised to near-zero at query time)
+    "standard_passage":   0.0,
+    "longrag_4k":         0.0,
+    "kg_extraction":      0.0,
     # Query
     "identity":           0.0,
-    "lightrag_keywords":  1.0,   # 1 LLM call for keyword extraction
+    "lightrag_keywords":  1.0,
     # Retrieval
-    "longrag_dataset":    0.0,   # pre-computed lookup
-    "lightrag_hybrid":    1.0,   # embedding call
-    "lightrag_chunk":     1.0,
-    "lightrag_graph":     1.0,
-    # Reranking
+    "bm25":               0.1,   # CPU-only lexical search
+    "dense_e5":           0.3,   # one embedding inference
+    "bm25_dense_hybrid":  0.4,   # BM25 + embedding + RRF merge
+    "lightrag_hybrid":    1.0,   # embedding + KG traversal
+    "lightrag_graph":     1.0,   # KG-only traversal
+    # Post-Retrieval
+    "cross_encoder":      0.5,   # N forward passes on cross-encoder
     "lightrag_compress":  1.0,   # 1 LLM call for compression
-    "selfrag_evidence":   0.5,   # scoring is lighter than generation
+    "selfrag_critique":   0.5,   # scoring is lighter than generation
     # Generation
-    "longrag_reader":     1.0,   # 1 LLM call
-    "lightrag_answer":    1.0,   # 1 LLM call
+    "longrag_reader":     1.0,
+    "lightrag_answer":    1.0,
     "selfrag_generator":  1.5,   # generate + score
+    "simple_llm":         1.0,
 }
 
 # Reward lookup: simulated quality scores for key configurations.
-# Keys are (query, retrieval, reranking, generation) tuples.
-# Missing configs get a default baseline.
+# Keys are 5-tuples (chunking, query, retrieval, post_retrieval, generation).
 REWARD_TABLE: dict[tuple[str, ...], float] = {
-    # Strong: LightRAG full pipeline
-    ("lightrag_keywords", "lightrag_hybrid", "lightrag_compress", "lightrag_answer"): 0.88,
-    # Strong: LightRAG retrieval + SelfRAG reranking + LightRAG gen
-    ("lightrag_keywords", "lightrag_hybrid", "selfrag_evidence", "lightrag_answer"):  0.91,
-    # Strong: LightRAG retrieval + SelfRAG reranking + SelfRAG gen
-    ("lightrag_keywords", "lightrag_hybrid", "selfrag_evidence", "selfrag_generator"): 0.89,
-    # LongRAG baseline with identity
-    ("identity", "longrag_dataset", "identity", "longrag_reader"):                     0.72,
-    # LongRAG + SelfRAG reranking
-    ("identity", "longrag_dataset", "selfrag_evidence", "longrag_reader"):             0.78,
-    # Cross: LightRAG retrieval + LongRAG generation
-    ("lightrag_keywords", "lightrag_hybrid", "identity", "longrag_reader"):            0.76,
-    # Cross: LongRAG retrieval + LightRAG generation
-    ("identity", "longrag_dataset", "identity", "lightrag_answer"):                    0.68,
-    # Cross: LightRAG retrieval + LightRAG compress + SelfRAG gen
-    ("lightrag_keywords", "lightrag_hybrid", "lightrag_compress", "selfrag_generator"): 0.86,
-    # Chunk-only retrieval
-    ("lightrag_keywords", "lightrag_chunk", "lightrag_compress", "lightrag_answer"):   0.80,
-    # Graph-only retrieval
-    ("lightrag_keywords", "lightrag_graph", "lightrag_compress", "lightrag_answer"):   0.82,
-    # LongRAG + LightRAG compress + LightRAG gen
-    ("identity", "longrag_dataset", "lightrag_compress", "lightrag_answer"):           0.74,
-    # SelfRAG evidence + LongRAG reader
-    ("lightrag_keywords", "lightrag_graph", "selfrag_evidence", "longrag_reader"):     0.79,
+    # -- Framework preset baselines --
+    # LongRAG preset: longrag_4k + identity + bm25 + identity + longrag_reader
+    ("longrag_4k", "identity", "bm25", "identity", "longrag_reader"):                     0.72,
+    # LightRAG preset: kg_extraction + lightrag_keywords + lightrag_hybrid + lightrag_compress + lightrag_answer
+    ("kg_extraction", "lightrag_keywords", "lightrag_hybrid", "lightrag_compress", "lightrag_answer"): 0.88,
+    # Self-RAG preset: standard_passage + identity + dense_e5 + selfrag_critique + selfrag_generator
+    ("standard_passage", "identity", "dense_e5", "selfrag_critique", "selfrag_generator"):  0.85,
+
+    # -- Cross-framework combinations --
+    # BM25 + cross-encoder reranking (classic IR pipeline)
+    ("standard_passage", "identity", "bm25", "cross_encoder", "longrag_reader"):           0.79,
+    ("standard_passage", "identity", "bm25", "cross_encoder", "simple_llm"):               0.78,
+    # Dense + cross-encoder
+    ("standard_passage", "identity", "dense_e5", "cross_encoder", "longrag_reader"):       0.82,
+    ("standard_passage", "identity", "dense_e5", "cross_encoder", "simple_llm"):           0.81,
+    # Hybrid BM25+Dense + cross-encoder (expected strongest standard pipeline)
+    ("standard_passage", "identity", "bm25_dense_hybrid", "cross_encoder", "longrag_reader"):  0.86,
+    ("standard_passage", "identity", "bm25_dense_hybrid", "cross_encoder", "simple_llm"):      0.85,
+    # Hybrid + selfrag critique
+    ("standard_passage", "identity", "bm25_dense_hybrid", "selfrag_critique", "selfrag_generator"): 0.87,
+    # LightRAG retrieval + cross-encoder
+    ("kg_extraction", "lightrag_keywords", "lightrag_hybrid", "cross_encoder", "lightrag_answer"):  0.90,
+    # LightRAG retrieval + selfrag critique + selfrag gen
+    ("kg_extraction", "lightrag_keywords", "lightrag_hybrid", "selfrag_critique", "selfrag_generator"): 0.89,
+    # LongRAG 4k chunks + dense retrieval
+    ("longrag_4k", "identity", "dense_e5", "identity", "longrag_reader"):                  0.74,
+    ("longrag_4k", "identity", "dense_e5", "cross_encoder", "longrag_reader"):             0.80,
+    # LightRAG graph-only retrieval
+    ("kg_extraction", "lightrag_keywords", "lightrag_graph", "lightrag_compress", "lightrag_answer"): 0.82,
+    # Hybrid + lightrag compress
+    ("standard_passage", "identity", "bm25_dense_hybrid", "lightrag_compress", "lightrag_answer"):    0.83,
 }
 
 # Default reward for configs not in the table
 DEFAULT_REWARD = 0.55
 
-# Incompatible combinations that get penalized
-INCOMPATIBLE: set[tuple[str, str]] = set()
+# Incompatible: lightrag retrieval without kg_extraction gets penalised
+INCOMPATIBLE_PENALTY = 0.20
+
+
+def _check_constraints(choices: tuple[str, ...]) -> bool:
+    """Return True if the configuration satisfies hard constraints."""
+    if len(choices) >= 3:
+        chunking, _, retrieval = choices[0], choices[1], choices[2]
+        required = CHUNKING_RETRIEVAL_CONSTRAINTS.get(retrieval)
+        if required and chunking != required:
+            return False
+    return True
 
 
 def _compute_reward(choices: tuple[str, ...]) -> float:
+    if not _check_constraints(choices):
+        return DEFAULT_REWARD - INCOMPATIBLE_PENALTY
+
     if choices in REWARD_TABLE:
         return REWARD_TABLE[choices]
-    # Fall back: check if the 4-component suffix matches (for backward compat)
-    if len(choices) == 5:
-        suffix = choices[1:]
-        if suffix in REWARD_TABLE:
-            return REWARD_TABLE[suffix]
+
     base = DEFAULT_REWARD
     for component in choices:
         base += COMPONENT_COSTS.get(component, 0.0) * 0.02
@@ -146,260 +178,30 @@ def _compute_cost(choices: tuple[str, ...]) -> float:
 # Pipeline builder: maps slot values to real adapter instances
 # ---------------------------------------------------------------------------
 
-def _build_longrag_generation():
-    """Build a LongRAGGeneration with a SimpleLLM-backed inference shim.
-
-    ``LongRAGGeneration`` requires an ``llm_inference`` object exposing
-    ``predict_nq()`` and ``predict_hotpotqa()``.  When the full LongRAG
-    inference module is unavailable, this creates a lightweight shim that
-    delegates to ``SimpleLLMGeneration`` from ``rag_contracts``.
-    """
-    import os
-
-    api_key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        from rag_contracts import IdentityGeneration
-        return IdentityGeneration()
-
-    class _LLMInferenceShim:
-        """Mimics LongRAG's inference API using OpenAI chat completions."""
-
-        def __init__(self):
-            from openai import OpenAI
-            base = os.environ.get("LLM_BASE_URL") or os.environ.get("OPENAI_API_BASE", "")
-            self.client = OpenAI(api_key=api_key, base_url=base or None)
-            self.model = os.environ.get("DEFAULT_LLM", "gpt-4o-mini")
-
-        def _ask(self, context, query, titles):
-            titles_str = ", ".join(titles) if titles else "N/A"
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                temperature=0.1,
-                max_tokens=300,
-                messages=[
-                    {"role": "system",
-                     "content": "You are an expert reader. Extract the answer "
-                     "from the provided context. Be concise and precise."},
-                    {"role": "user",
-                     "content": f"Titles: {titles_str}\n\n"
-                     f"Context:\n{context[:4000]}\n\n"
-                     f"Question: {query}\n\nAnswer:"},
-                ],
-            )
-            ans = (resp.choices[0].message.content or "").strip()
-            return ans, ans
-
-        def predict_nq(self, context, query, titles):
-            return self._ask(context, query, titles)
-
-        def predict_hotpotqa(self, context, query, titles):
-            return self._ask(context, query, titles)
-
-    from longRAG_example.longrag_langgraph.adapters import LongRAGGeneration
-    return LongRAGGeneration(llm_inference=_LLMInferenceShim())
+from rag_contracts.component_registry import (  # noqa: E402
+    build_longrag_generation as _build_longrag_generation,
+    build_pipeline_from_config,
+    build_selfrag_components as _build_selfrag_components,
+    build_simple_llm as _build_simple_llm,
+)
 
 
-def _build_selfrag_components() -> tuple:
-    """Build SelfRAG reranking and generation adapters using an OpenAI vLLM shim.
+def _load_corpus_for_benchmark(benchmark: str, chunks: dict | None = None):
+    """Load a CorpusIndex for the given benchmark from sample_data or chunks dict."""
+    from rag_contracts import CorpusIndex
+    from pathlib import Path
 
-    Uses the same approach as ``real_selfrag_swap_demo.py``: wraps OpenAI
-    chat completions behind the vLLM ``generate()`` interface so that
-    ``SelfRAGReranking`` / ``SelfRAGGeneration`` can score passages with
-    synthetic logprobs.
+    if chunks:
+        return CorpusIndex.from_chunks_dict(chunks)
 
-    Returns ``(reranking, generation)`` or ``(None, None)`` on failure.
-    """
-    import os
-    import types
-    from unittest.mock import MagicMock
-
-    if "vllm" not in sys.modules:
-        from dataclasses import dataclass as _dc
-
-        _fv = types.ModuleType("vllm")
-
-        @_dc
-        class _SP:
-            temperature: float = 0.0
-            top_p: float = 1.0
-            max_tokens: int = 100
-            logprobs: int = 0
-
-        _fv.SamplingParams = _SP
-        sys.modules["vllm"] = _fv
-
-    if "torch" not in sys.modules:
-        _ft = types.ModuleType("torch")
-        _ft.no_grad = lambda: MagicMock(
-            __enter__=lambda s: None, __exit__=lambda s, *a: None
-        )
-        sys.modules["torch"] = _ft
-
-    _sr_root = str(
-        __import__("pathlib").Path(__file__).resolve().parent.parent.parent.parent
-        / "self-rag_langgraph" / "self-rag-wtb"
-    )
-    if _sr_root not in sys.path:
-        sys.path.insert(0, _sr_root)
-
-    try:
-        from selfrag.adapters import SelfRAGGeneration, SelfRAGReranking
-        from selfrag.constants import (
-            ground_tokens_names,
-            load_special_tokens,
-            rel_tokens_names,
-            retrieval_tokens_names,
-            utility_tokens_names,
-        )
-    except ImportError:
-        return None, None
-
-    api_key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        return None, None
-
-    ALL_SPECIAL = (
-        retrieval_tokens_names + rel_tokens_names
-        + ground_tokens_names + utility_tokens_names
-    )
-    TOKEN_MAP = {tok: 2000 + i for i, tok in enumerate(ALL_SPECIAL)}
-
-    class _Tok:
-        def convert_tokens_to_ids(self, token: str) -> int:
-            return TOKEN_MAP.get(token, 0)
-
-    class _Out:
-        def __init__(self, text):
-            self.text = text
-            from selfrag.constants import control_tokens as _ct
-            found_rel = next((t for t in rel_tokens_names if t in text), "[Relevant]")
-            found_grd = next((t for t in ground_tokens_names if t in text), "[Fully supported]")
-            found_ut = next((t for t in utility_tokens_names if t in text), "[Utility:5]")
-            n = max(5, len(text.split()) // 2)
-            self.token_ids = [TOKEN_MAP.get(found_rel, 888)]
-            self.token_ids.extend([888] * n)
-            gp = len(self.token_ids)
-            self.token_ids.append(TOKEN_MAP.get(found_grd, 888))
-            up = len(self.token_ids)
-            self.token_ids.append(TOKEN_MAP.get(found_ut, 888))
-            self.logprobs = []
-            for pos in range(len(self.token_ids)):
-                e = {}
-                for t in rel_tokens_names:
-                    e[TOKEN_MAP[t]] = -0.1 if (pos == 0 and t == found_rel) else -5.0
-                for t in retrieval_tokens_names:
-                    e[TOKEN_MAP[t]] = -5.0
-                for t in ground_tokens_names:
-                    e[TOKEN_MAP[t]] = -0.1 if (pos == gp and t == found_grd) else -5.0
-                for t in utility_tokens_names:
-                    e[TOKEN_MAP[t]] = -0.1 if (pos == up and t == found_ut) else -5.0
-                self.logprobs.append(e)
-            self.cumulative_logprob = -2.0
-
-    class _Pred:
-        def __init__(self, o):
-            self.outputs = [o]
-
-    class _Model:
-        def __init__(self):
-            from openai import OpenAI
-            base = os.environ.get("LLM_BASE_URL") or os.environ.get("OPENAI_API_BASE", "")
-            self.client = OpenAI(api_key=api_key, base_url=base or None)
-            self.model = os.environ.get("DEFAULT_LLM", "gpt-4o-mini")
-
-        def generate(self, prompts, sp=None):
-            out = []
-            for p in prompts:
-                try:
-                    r = self.client.chat.completions.create(
-                        model=self.model,
-                        messages=[
-                            {"role": "system",
-                             "content": "You are a Self-RAG assistant. Given a question and "
-                             "optionally a paragraph of evidence, produce a SHORT factual "
-                             "answer wrapped in Self-RAG control tokens.\n"
-                             "Format: [Relevant]<answer>[Fully supported][Utility:5]"},
-                            {"role": "user", "content": p},
-                        ],
-                        temperature=getattr(sp, "temperature", 0.0),
-                        max_tokens=getattr(sp, "max_tokens", 150),
-                    )
-                    txt = r.choices[0].message.content or ""
-                except Exception:
-                    txt = "[Relevant]Error[Partially supported][Utility:3]"
-                out.append(_Pred(_Out(txt)))
-            return out
-
-    tok = _Tok()
-    _, rel, grd, ut = load_special_tokens(tok, use_grounding=True, use_utility=True)
-    model = _Model()
-
-    reranking = SelfRAGReranking(model=model, rel_tokens=rel, grd_tokens=grd, ut_tokens=ut)
-    generation = SelfRAGGeneration(model=model, rel_tokens=rel, grd_tokens=grd, ut_tokens=ut)
-    return reranking, generation
-
-
-def build_pipeline_from_config(
-    choices: tuple[str, ...],
-    benchmark: str = "hotpotqa",
-) -> dict[str, Any]:
-    """Build a dict of rag_contracts components from a UCT config tuple.
-
-    Accepts both 4-tuples ``(query, retrieval, reranking, generation)``
-    and 5-tuples ``(frame, query, retrieval, reranking, generation)``.
-
-    Returns ``{"query": ..., "retrieval": ..., "reranking": ...,
-    "generation": ..., "frame": ...}``.
-    Raises ImportError if required packages are not installed.
-    """
-    from rag_contracts import IdentityQuery, IdentityReranking, IdentityGeneration, SimpleLLMGeneration
-
-    if len(choices) == 5:
-        frame_name = choices[0]
-        query_name, retrieval_name, reranking_name, generation_name = choices[1:]
-    else:
-        frame_name = "longrag"
-        query_name, retrieval_name, reranking_name, generation_name = choices
-    components: dict[str, Any] = {}
-
-    if query_name == "identity":
-        components["query"] = IdentityQuery()
-    elif query_name == "lightrag_keywords":
-        from lightrag_langgraph.adapters import LightRAGQuery
-        components["query"] = LightRAGQuery()
-
-    if retrieval_name == "longrag_dataset":
-        from longRAG_example.longrag_langgraph.adapters import HFDatasetRetrieval
-        components["retrieval"] = HFDatasetRetrieval()
-    elif retrieval_name in ("lightrag_hybrid", "lightrag_chunk", "lightrag_graph"):
-        from lightrag_langgraph.adapters import LightRAGRetrieval
-        mode_map = {
-            "lightrag_hybrid": "hybrid",
-            "lightrag_chunk": "chunk",
-            "lightrag_graph": "graph",
-        }
-        components["retrieval"] = LightRAGRetrieval(mode=mode_map[retrieval_name])
-
-    if reranking_name == "identity":
-        components["reranking"] = IdentityReranking()
-    elif reranking_name == "lightrag_compress":
-        from lightrag_langgraph.adapters import LightRAGReranking
-        components["reranking"] = LightRAGReranking()
-    elif reranking_name == "selfrag_evidence":
-        selfrag_rr, _ = _build_selfrag_components()
-        components["reranking"] = selfrag_rr if selfrag_rr else IdentityReranking()
-
-    if generation_name == "longrag_reader":
-        components["generation"] = _build_longrag_generation()
-    elif generation_name == "lightrag_answer":
-        from lightrag_langgraph.adapters import LightRAGGeneration
-        components["generation"] = LightRAGGeneration()
-    elif generation_name == "selfrag_generator":
-        _, selfrag_gen = _build_selfrag_components()
-        components["generation"] = selfrag_gen if selfrag_gen else IdentityGeneration()
-
-    components["frame"] = frame_name
-    return components
+    chunks_paths = {
+        "hotpotqa": "benchmark/sample_data/hotpotqa_kg_sample/chunks.json",
+        "ultradomain": "benchmark/sample_data/ultradomain_kg_sample/chunks.json",
+    }
+    path = chunks_paths.get(benchmark)
+    if path and Path(path).exists():
+        return CorpusIndex.from_json_file(path)
+    return None
 
 
 def evaluate_config_real(
@@ -412,6 +214,11 @@ def evaluate_config_real(
     This is the bridge between AG-UCT and real rag_contracts evaluation.
     Returns a normalized reward in [0, 1].
 
+    The full pipeline (retrieval + post-retrieval + generation) is exercised
+    when a corpus is available.  For ALCE, the graph_factory pattern with
+    ALCEDocRetrieval is used.  Falls back to generation-only evaluation
+    when corpus loading or pipeline construction fails.
+
     Parameters
     ----------
     frozen_sample:
@@ -419,17 +226,18 @@ def evaluate_config_real(
         When provided, items are converted to eval dicts on-the-fly instead
         of loading from ``sample_data/``.
     """
+    if frozen_sample is not None:
+        return _evaluate_frozen(frozen_sample, benchmark, choices)
+
     try:
-        components = build_pipeline_from_config(choices, benchmark)
+        corpus = _load_corpus_for_benchmark(benchmark)
+        components = build_pipeline_from_config(choices, benchmark, corpus=corpus)
     except (ImportError, Exception):
         return DEFAULT_REWARD
 
     generation = components.get("generation")
     if generation is None:
         return DEFAULT_REWARD
-
-    if frozen_sample is not None:
-        return _evaluate_frozen(frozen_sample, benchmark, generation)
 
     try:
         if benchmark == "hotpotqa":
@@ -439,7 +247,11 @@ def evaluate_config_real(
             )
             data = load_hotpotqa_sample("benchmark/sample_data/hotpotqa_kg_sample")
             adapter = HotpotQABenchmarkAdapter()
-            result = adapter.evaluate_generation(data, generation)
+            graph = _build_eval_graph(choices, components)
+            if graph is not None:
+                result = adapter.evaluate_pipeline(data, graph)
+            else:
+                result = adapter.evaluate_generation(data, generation)
             return result.avg_f1 / 100.0
         elif benchmark == "ultradomain":
             from benchmark.ultradomain_adapter import (
@@ -448,17 +260,21 @@ def evaluate_config_real(
             )
             data = load_ultradomain_sample("benchmark/sample_data/ultradomain_kg_sample")
             adapter = UltraDomainBenchmarkAdapter()
-            result = adapter.evaluate_generation(data, generation)
+            graph = _build_eval_graph(choices, components)
+            if graph is not None:
+                result = adapter.evaluate_pipeline(data, graph)
+            else:
+                result = adapter.evaluate_generation(data, generation)
             return result.avg_f1 / 100.0
         elif benchmark == "alce":
-            from benchmark.alce_adapter import ALCEBenchmarkAdapter, load_alce_data
+            from benchmark.alce_adapter import ALCEBenchmarkAdapter
             import json
-            from pathlib import Path
-            docs_path = Path("benchmark/sample_data/alce_kg_sample/alce_docs.json")
+            from pathlib import Path as _P
+            docs_path = _P("benchmark/sample_data/alce_kg_sample/alce_docs.json")
             if docs_path.exists():
                 with open(docs_path, encoding="utf-8") as f:
                     all_docs = json.load(f)
-                queries_path = Path("benchmark/sample_data/alce_kg_sample/queries.jsonl")
+                queries_path = _P("benchmark/sample_data/alce_kg_sample/queries.jsonl")
                 data = []
                 with open(queries_path, encoding="utf-8") as f:
                     for line in f:
@@ -470,7 +286,11 @@ def evaluate_config_real(
                                 "docs": all_docs.get(q["query_id"], []),
                             })
                 adapter = ALCEBenchmarkAdapter()
-                result = adapter.evaluate_generation(data, generation)
+                factory = _build_alce_graph_factory(choices, components)
+                if factory is not None:
+                    result = adapter.evaluate_pipeline(data, factory)
+                else:
+                    result = adapter.evaluate_generation(data, generation)
                 return result.avg_f1 / 100.0
     except Exception:
         pass
@@ -478,41 +298,110 @@ def evaluate_config_real(
     return DEFAULT_REWARD
 
 
-def _evaluate_frozen(frozen_sample: list, benchmark: str, generation) -> float:
-    """Evaluate a frozen BenchmarkItem sample against a real generation component."""
+def _build_eval_graph(choices: tuple[str, ...], components: dict):
+    """Try to build a compiled LangGraph from components. Returns None on failure."""
+    try:
+        from ominirag_wtb.config_types import RAGConfig
+        from ominirag_wtb.graph_factories import config_to_graph_factory
+        config = RAGConfig.from_tuple(choices if len(choices) == 5 else ("standard_passage",) + choices)
+        factory = config_to_graph_factory(config)
+        return factory()
+    except Exception:
+        return None
+
+
+def _build_alce_graph_factory(choices: tuple[str, ...], components: dict):
+    """Build a graph_factory callable for ALCE (injects ALCEDocRetrieval per item)."""
+    try:
+        from ominirag_wtb.config_types import RAGConfig
+        from ominirag_wtb.graph_factories import _infer_frame, _get_frame_builder
+        from rag_contracts import ALCEDocRetrieval
+
+        config = RAGConfig.from_tuple(choices if len(choices) == 5 else ("standard_passage",) + choices)
+        frame = _infer_frame(config)
+        builder = _get_frame_builder(frame)
+
+        def factory(retrieval=None):
+            ret = retrieval if retrieval is not None else components["retrieval"]
+            return builder(
+                retrieval=ret,
+                generation=components["generation"],
+                reranking=components.get("post_retrieval"),
+                query=components.get("query"),
+            )
+        return factory
+    except Exception:
+        return None
+
+
+def _evaluate_frozen(frozen_sample: list, benchmark: str, choices: tuple[str, ...]) -> float:
+    """Evaluate a frozen BenchmarkItem sample with the full pipeline when possible."""
     try:
         if benchmark == "hotpotqa":
             from benchmark.hotpotqa_adapter import HotpotQABenchmarkAdapter
             eval_items = []
+            all_chunks: dict = {}
             for bitem in frozen_sample:
                 p = bitem.payload
                 chunks = {}
                 for idx, (title, sents) in enumerate(
                     zip(p.get("context_titles", []), p.get("context_sentences", []))
                 ):
-                    chunks[f"c{idx}"] = {"content": f"[{title}] " + " ".join(sents), "doc_ids": [title]}
+                    chunk_id = f"c{bitem.item_id}_{idx}"
+                    chunk_data = {"content": f"[{title}] " + " ".join(sents), "doc_ids": [title]}
+                    chunks[chunk_id] = chunk_data
+                    all_chunks[chunk_id] = chunk_data
                 eval_items.append({
                     "question": p["question"], "answer": bitem.target["answer"],
                     "query_id": bitem.item_id, "chunks": chunks,
                 })
+
+            corpus = _load_corpus_for_benchmark(benchmark, all_chunks)
+            components = build_pipeline_from_config(choices, benchmark, corpus=corpus)
+            generation = components.get("generation")
+            if generation is None:
+                return DEFAULT_REWARD
+
             adapter = HotpotQABenchmarkAdapter()
-            result = adapter.evaluate_generation(eval_items, generation)
+            graph = _build_eval_graph(choices, components)
+            if graph is not None:
+                result = adapter.evaluate_pipeline(eval_items, graph)
+            else:
+                result = adapter.evaluate_generation(eval_items, generation)
             return result.avg_f1 / 100.0
 
         elif benchmark == "ultradomain":
             from benchmark.ultradomain_adapter import UltraDomainBenchmarkAdapter
             eval_items = []
+            all_chunks: dict = {}
             for bitem in frozen_sample:
                 ctx = (bitem.payload.get("context") or "")[:3000]
                 domain = bitem.metadata.get("domain", "unknown")
-                chunks = {"c0": {"content": ctx, "doc_ids": [domain]}} if ctx else {}
+                chunk_id = f"c{bitem.item_id}"
+                if ctx:
+                    chunk_data = {"content": ctx, "doc_ids": [domain]}
+                    all_chunks[chunk_id] = chunk_data
+                    chunks = {chunk_id: chunk_data}
+                else:
+                    chunks = {}
                 eval_items.append({
                     "question": bitem.payload.get("query") or "",
                     "answer": bitem.target.get("answer") or "",
                     "domain": domain, "query_id": bitem.item_id, "chunks": chunks,
                 })
+
+            corpus = _load_corpus_for_benchmark(benchmark, all_chunks)
+            components = build_pipeline_from_config(choices, benchmark, corpus=corpus)
+            generation = components.get("generation")
+            if generation is None:
+                return DEFAULT_REWARD
+
             adapter = UltraDomainBenchmarkAdapter()
-            result = adapter.evaluate_generation(eval_items, generation)
+            graph = _build_eval_graph(choices, components)
+            if graph is not None:
+                result = adapter.evaluate_pipeline(eval_items, graph)
+            else:
+                result = adapter.evaluate_generation(eval_items, generation)
             return result.avg_f1 / 100.0
 
         elif benchmark == "alce":
@@ -526,8 +415,18 @@ def _evaluate_frozen(frozen_sample: list, benchmark: str, generation) -> float:
                     "qa_pairs": bitem.target.get("qa_pairs", []),
                     "query_id": bitem.item_id,
                 })
+
+            components = build_pipeline_from_config(choices, benchmark)
+            generation = components.get("generation")
+            if generation is None:
+                return DEFAULT_REWARD
+
             adapter = ALCEBenchmarkAdapter()
-            result = adapter.evaluate_generation(eval_items, generation)
+            factory = _build_alce_graph_factory(choices, components)
+            if factory is not None:
+                result = adapter.evaluate_pipeline(eval_items, factory)
+            else:
+                result = adapter.evaluate_generation(eval_items, generation)
             return result.avg_f1 / 100.0
 
     except Exception:
@@ -589,7 +488,17 @@ class RAGPipelineSearchState:
         depth = len(self.choices)
         if depth >= len(SLOT_OPTIONS):
             return []
-        return list(SLOT_OPTIONS[depth])
+        options = list(SLOT_OPTIONS[depth])
+
+        # Prune retrieval options that violate chunking constraint
+        if depth == 2 and len(self.choices) >= 1:
+            chunking = self.choices[0]
+            options = [
+                o for o in options
+                if CHUNKING_RETRIEVAL_CONSTRAINTS.get(o, chunking) == chunking
+            ]
+
+        return options
 
     def child(self, action: Hashable) -> "RAGPipelineSearchState":
         return RAGPipelineSearchState(self.choices + (str(action),))
@@ -628,12 +537,16 @@ DATASET_AFFINITY: dict[tuple[str, str], float] = {
     # LightRAG hybrid excels on UltraDomain (domain-specific KG)
     ("lightrag_hybrid", "ultradomain"): 0.05,
     ("lightrag_graph", "ultradomain"):  0.04,
-    # SelfRAG evidence scoring helps with multi-hop (HotpotQA)
-    ("selfrag_evidence", "hotpotqa"):   0.03,
+    # SelfRAG critique scoring helps with multi-hop (HotpotQA)
+    ("selfrag_critique", "hotpotqa"):   0.03,
+    # Cross-encoder helps with precision (HotpotQA multi-hop)
+    ("cross_encoder", "hotpotqa"):      0.02,
     # LightRAG compression helps ALCE (citation quality)
     ("lightrag_compress", "alce"):      0.03,
-    # LongRAG dataset retrieval is tuned for HotpotQA
-    ("longrag_dataset", "hotpotqa"):    0.04,
+    # BM25 is strong for factoid lookup
+    ("bm25", "hotpotqa"):               0.02,
+    # Hybrid retrieval benefits domain-specific queries
+    ("bm25_dense_hybrid", "ultradomain"): 0.03,
 }
 
 

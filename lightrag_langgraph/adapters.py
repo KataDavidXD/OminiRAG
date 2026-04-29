@@ -174,9 +174,12 @@ class LightRAGRetrieval:
 class LightRAGReranking:
     """``rag_contracts.Reranking`` wrapping LightRAG's context compression.
 
-    Unlike traditional rerankers that re-score individual items, LightRAG's
-    reranking compresses the full context into a focused evidence brief.
+    NOTE: This is context compression / distillation, not traditional
+    cross-encoder reranking.  It compresses the full context into a focused
+    evidence brief via LLM, rather than re-scoring individual passages.
     The compressed text is attached to each result's metadata.
+    For standard cross-encoder reranking, see ``CrossEncoderReranking``
+    in ``rag_contracts.reranking_methods``.
     """
 
     config: Any = None

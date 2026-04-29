@@ -1,23 +1,27 @@
 # OminiRAG -- Modular RAG Component Standardization
 
-OminiRAG defines a **canonical 6-stage RAG pipeline** where every stage is a
-replaceable component. Three real-world RAG systems -- **LongRAG** (extractive
-QA), **LightRAG** (knowledge-graph-augmented retrieval), and **Self-RAG**
-(LLM-based retrieval with evidence scoring) -- are refactored so that their
-internal components can be freely swapped through a shared contract layer.
+OminiRAG defines a **5-dimension RAG configuration space** where every
+dimension is independently searchable. Three real-world RAG systems --
+**LongRAG** (extractive QA), **LightRAG** (knowledge-graph-augmented
+retrieval), and **Self-RAG** (LLM-based retrieval with evidence scoring) --
+serve as **default presets**, and their internal components can be freely
+swapped through a shared contract layer.
 
 ```text
-Chunking -> Embedding -> Query -> Retrieval -> Reranking -> Generation
+Chunking -> Query -> Retrieval -> Post-Retrieval -> Generation
+  (offline)          (corpus search)  (reranking/      (answer
+                                       compression/     generation)
+                                       critique)
 ```
 
 Components from any framework can be injected into any pipeline via dependency
 injection. All three pipelines share an **identical 4-node LangGraph topology**:
 
 ```text
-query_processing -> retrieval -> reranking -> generation -> END
+query_processing -> retrieval -> post_retrieval -> generation -> END
 ```
 
-An **AG-UCT search engine** explores the 4-slot configuration space across
+An **AG-UCT search engine** explores the 5-dimension configuration space across
 3 benchmark datasets to find optimal component combinations.
 
 ---
@@ -26,6 +30,26 @@ An **AG-UCT search engine** explores the 4-slot configuration space across
 
 ```mermaid
 graph TB
+    subgraph Offline["Offline Layer (Chunking -> Index)"]
+        C_SP["standard_passage<br/>(fixed-size chunks)"]
+        C_LR["longrag_4k<br/>(graph-merged 4K units)"]
+        C_KG["kg_extraction<br/>(entities + relations + chunks)"]
+    end
+
+    subgraph Retrieval_Methods["Real Retrieval Methods"]
+        R_BM25["BM25Retrieval<br/>(rank_bm25)"]
+        R_Dense["DenseRetrieval<br/>(sentence-transformers E5)"]
+        R_Hybrid["HybridRetrieval<br/>(BM25 + Dense RRF)"]
+        R_LightRAG["LightRAGRetrieval<br/>(vector + KG hybrid)"]
+    end
+
+    subgraph PostRetrieval["Post-Retrieval Methods"]
+        PR_CE["CrossEncoderReranking<br/>(ms-marco MiniLM)"]
+        PR_LC["LightRAGReranking<br/>(LLM context compression)"]
+        PR_SC["SelfRAGReranking<br/>(generate+critique scoring)"]
+        PR_ID["IdentityReranking<br/>(passthrough)"]
+    end
+
     subgraph Protocols["rag_contracts (Protocol Layer)"]
         P_Q["Query protocol<br/>process(query, ctx) -> list[str]"]
         P_R["Retrieval protocol<br/>retrieve(queries, top_k) -> list[RR]"]
@@ -40,10 +64,14 @@ graph TB
     end
 
     subgraph Adapters["Framework Adapters"]
-        longA["HFDatasetRetrieval<br/>LongRAGGeneration"]
+        longA["LongRAGGeneration"]
         lightA["LightRAGQuery<br/>LightRAGRetrieval<br/>LightRAGReranking<br/>LightRAGGeneration"]
-        selfA["SelfRAGRetrieval<br/>SelfRAGReranking<br/>SelfRAGGeneration"]
-        commonA["LLMRetrieval<br/>DuckDuckGoRetrieval<br/>ALCEDocRetrieval<br/>SimpleLLMGeneration"]
+        selfA["SelfRAGReranking<br/>SelfRAGGeneration"]
+        commonA["SimpleLLMGeneration"]
+    end
+
+    subgraph Utility["Utility / Benchmark Scaffolding"]
+        utilA["LLMRetrieval<br/>DuckDuckGoRetrieval<br/>HFDatasetRetrieval<br/>ALCEDocRetrieval"]
     end
 
     subgraph Benchmarks["Benchmark Adapters"]
@@ -53,13 +81,18 @@ graph TB
     end
 
     subgraph Search["AG-UCT Search"]
-        UCT["RAGPipelineSearchState<br/>4 slots x N options<br/>build_pipeline_from_config()"]
+        UCT["RAGPipelineSearchState<br/>5 dims x N options<br/>build_pipeline_from_config()"]
     end
 
+    Offline --> Retrieval_Methods
+    Retrieval_Methods --> Protocols
+    PostRetrieval --> Protocols
     Protocols --> Pipelines
     Adapters --> Protocols
     Pipelines --> Benchmarks
     UCT --> Adapters
+    UCT --> Retrieval_Methods
+    UCT --> PostRetrieval
     UCT --> Benchmarks
 ```
 
@@ -105,27 +138,34 @@ exchange components at any stage.
 
 ---
 
-## Framework x Benchmark Matrix
+## Framework Presets and Benchmark Matrix
+
+The three frameworks are now **default configuration presets** within the
+5-dimension search space, not rigid pipelines:
+
+| Preset | Chunking | Query | Retrieval | Post-Retrieval | Generation |
+| --- | --- | --- | --- | --- | --- |
+| **LongRAG** | `longrag_4k` | `identity` | `bm25` / `dense_e5` | `identity` | `longrag_reader` |
+| **LightRAG** | `kg_extraction` | `lightrag_keywords` | `lightrag_hybrid` | `lightrag_compress` | `lightrag_answer` |
+| **Self-RAG** | `standard_passage` | `identity` | `dense_e5` | `selfrag_critique` | `selfrag_generator` |
 
 ### Benchmarks
 
-**HotpotQA**: Multi-hop QA over Wikipedia. Input is a question; context is pre-grouped 4K-token chunks. Evaluation: EM, F1. Challenge: connecting facts across multiple passages.
+**HotpotQA**: Multi-hop QA over Wikipedia. Evaluation: EM, F1. Challenge: connecting facts across multiple passages.
 
-**UltraDomain**: Domain-specific QA (agriculture, CS, legal, mix). Input is a domain text corpus in JSONL format. Evaluation: LLM-as-judge (Comprehensiveness, Diversity, Empowerment). Challenge: deep domain knowledge, entity relationships.
+**UltraDomain**: Domain-specific QA (agriculture, CS, legal). Evaluation: LLM-as-judge (Comprehensiveness, Diversity, Empowerment). Challenge: deep domain knowledge, entity relationships.
 
-**ALCE**: Per-document segmented QA (ASQA, QAMPARI, ELI5). Input is a question plus N pre-retrieved documents. Evaluation: F1, STR-EM, citation recall/precision. Key characteristic: documents are already segmented -- each doc is a separate passage, making it a natural fit for Self-RAG's per-passage scoring.
+**ALCE**: Per-document segmented QA (ASQA, QAMPARI, ELI5). Evaluation: F1, STR-EM, citation recall/precision. Challenge: per-document evaluation, citation quality.
 
-### How Each Framework Handles Each Benchmark
+### How Each Preset Handles Each Benchmark
 
+| Benchmark | LongRAG Preset | LightRAG Preset | Self-RAG Preset | Key Challenge |
+| --- | --- | --- | --- | --- |
+| **HotpotQA** | BM25/Dense over 4K chunks -> reader | KG hybrid retrieval over Wikipedia | Dense retrieval -> critique scoring -> best passage | Multi-hop fact connection |
+| **UltraDomain** | Dense over 4K chunks | Native (hybrid vector+KG) | Dense retrieval -> per-passage scoring | Deep domain knowledge |
+| **ALCE** | BM25/Dense over ALCE docs -> reader | KG index over source corpus | Dense retrieval -> per-passage scoring+selection | Per-document evaluation |
 
-| Benchmark       | LongRAG                                                      | LightRAG                                                                                 | Self-RAG                                                                                                                    | Key Challenge             |
-| --------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| **HotpotQA**    | Native (HFDataset -> reader). Single 4K context per query.   | KG index over Wikipedia. Multi-hop KG expansion is a natural fit. Needs pre-built index. | Needs retrieval returning MULTIPLE passages for selection advantage. With single HFDataset passage, degrades to simple gen. | Multi-hop fact connection |
-| **UltraDomain** | Same chunking approach applicable. Not natively implemented. | Native (hybrid vector+KG). Full pipeline designed for this.                              | Same as HotpotQA -- needs multi-chunk retrieval. Pair with LightRAGRetrieval.                                               | Deep domain knowledge     |
-| **ALCE**        | Can concatenate pre-retrieved docs and extract answer.       | KG index over ALCE source corpus (bypasses pre-retrieved docs).                          | Natural fit -- ALCE provides N segmented docs, SelfRAG scores each independently.                                           | Per-document evaluation   |
-
-
-**Critical insight**: SelfRAGGeneration provides maximum value when retrieval returns MULTIPLE passages (for per-passage scoring+selection). When only 1 passage exists (HFDatasetRetrieval), it degrades to simple generation.
+**Critical insight**: SelfRAG generation provides maximum value when retrieval returns MULTIPLE passages (for per-passage scoring+selection). Cross-encoder reranking is the standard precision improvement across all presets.
 
 ```mermaid
 graph LR
@@ -152,93 +192,74 @@ graph LR
 
 ---
 
-## All Possible Component Combinations
+## 5-Dimension Configuration Space
 
-### Available Components by Slot
+### Available Components by Dimension
 
+| Dimension | Component | Source | Notes |
+| --- | --- | --- | --- |
+| **Chunking** (offline) | `standard_passage` | -- | Fixed-size passage chunks (e.g. 512 tokens) |
+| | `longrag_4k` | LongRAG | Graph-based document merging into 4K-token units |
+| | `kg_extraction` | LightRAG | Entity/relation extraction -> KG + chunk stores |
+| **Query** | `identity` | `rag_contracts` | Passthrough -- returns `[query]` |
+| | `lightrag_keywords` | `lightrag_langgraph/adapters.py` | LLM keyword extraction -> `[query, kw1, kw2, ...]` |
+| **Retrieval** (corpus search) | `bm25` | `rag_contracts/retrieval_methods.py` | Lexical matching via BM25Okapi. Fast, no GPU. |
+| | `dense_e5` | `rag_contracts/retrieval_methods.py` | Semantic matching via multilingual-e5-small. |
+| | `bm25_dense_hybrid` | `rag_contracts/retrieval_methods.py` | Reciprocal Rank Fusion of BM25 + Dense. |
+| | `lightrag_hybrid` | `lightrag_langgraph/adapters.py` | Vector + KG hybrid. Requires `kg_extraction` chunking. |
+| | `lightrag_graph` | `lightrag_langgraph/adapters.py` | KG-only traversal. Requires `kg_extraction` chunking. |
+| **Post-Retrieval** | `identity` | `rag_contracts` | Passthrough -- returns results unchanged |
+| | `cross_encoder` | `rag_contracts/reranking_methods.py` | Cross-encoder re-scoring (ms-marco-MiniLM-L-12-v2). Standard reranking. |
+| | `lightrag_compress` | `lightrag_langgraph/adapters.py` | LLM context compression into focused evidence brief. |
+| | `selfrag_critique` | `selfrag/adapters.py` | Per-passage generate+score (ISREL/ISSUP/ISUSE). Caches predictions. |
+| **Generation** | `longrag_reader` | `longRAG_example/.../adapters.py` | LLM reader with NQ/HotpotQA prompts. Short answer extraction. |
+| | `lightrag_answer` | `lightrag_langgraph/adapters.py` | LLM answer from structured context + optional compressed notes. |
+| | `selfrag_generator` | `selfrag/adapters.py` | Per-passage generate+score+select. Reuses critique cache. |
+| | `simple_llm` | `rag_contracts/common_components.py` | Generic LLM-based answer extraction. |
 
-| Slot           | Component             | Source                               | Notes                                                                                                        |
-| -------------- | --------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| **Query**      | `IdentityQuery`       | `rag_contracts`                      | Passthrough -- returns `[query]`                                                                             |
-|                | `LightRAGQuery`       | `lightrag_langgraph/adapters.py`     | LLM keyword extraction -> `[query, kw1, kw2, ...]`                                                           |
-| **Retrieval**  | `HFDatasetRetrieval`  | `longRAG_example/.../adapters.py`    | Pre-joined 4K context from HF dataset                                                                        |
-|                | `LightRAGRetrieval`   | `lightrag_langgraph/adapters.py`     | Hybrid vector+KG (4 stores). Requires pre-built KG index.                                                    |
-|                | `SelfRAGRetrieval`    | `selfrag/adapters.py`                | Contriever cosine search. Requires Contriever model + VectorStore + DocStore.                                |
-|                | `LLMRetrieval`        | `rag_contracts/common_components.py` | LLM-generated background context. No corpus needed.                                                          |
-|                | `DuckDuckGoRetrieval` | `rag_contracts/common_components.py` | Web search via DuckDuckGo. No corpus needed.                                                                 |
-|                | `FallbackRetrieval`   | `rag_contracts/common_components.py` | Chains primary + fallback retrieval.                                                                         |
-|                | `ALCEDocRetrieval`    | `rag_contracts/common_components.py` | Wraps ALCE pre-retrieved docs as Retrieval.                                                                  |
-| **Reranking**  | `IdentityReranking`   | `rag_contracts`                      | Passthrough -- returns results unchanged                                                                     |
-|                | `LightRAGReranking`   | `lightrag_langgraph/adapters.py`     | LLM context compression into focused evidence brief.                                                         |
-|                | `SelfRAGReranking`    | `selfrag/adapters.py`                | Per-passage generate+score (ISREL/ISSUP/ISUSE). Caches predictions for downstream generation.                |
-| **Generation** | `IdentityGeneration`  | `rag_contracts`                      | Joins content, returns concatenated text                                                                     |
-|                | `LongRAGGeneration`   | `longRAG_example/.../adapters.py`    | LLM reader (predict_nq/predict_hotpotqa). Short answer extraction.                                           |
-|                | `LightRAGGeneration`  | `lightrag_langgraph/adapters.py`     | LLM answer with structured context + optional compressed notes.                                              |
-|                | `SelfRAGGeneration`   | `selfrag/adapters.py`                | Per-passage generate+score+select. Returns best-scored answer. Reuses SelfRAGReranking cache when available. |
-|                | `SimpleLLMGeneration` | `rag_contracts/common_components.py` | Generic LLM-based answer extraction.                                                                         |
-
+**Utility / benchmark scaffolding** (not in the search space):
+`HFDatasetRetrieval`, `ALCEDocRetrieval`, `LLMRetrieval`, `DuckDuckGoRetrieval`, `FallbackRetrieval` -- these are used internally by benchmark adapters or as demo fallbacks, not as comparable retrieval methods.
 
 ### Combination Space
 
-- Query: 2 options (Identity, LightRAG)
-- Retrieval: 7 options (HFDataset, LightRAG, SelfRAG, LLM, DuckDuckGo, Fallback, ALCEDoc)
-- Reranking: 3 options (Identity, LightRAG, SelfRAG)
-- Generation: 5 options (Identity, LongRAG, LightRAG, SelfRAG, SimpleLLM)
+- Chunking: 3 options
+- Query: 2 options
+- Retrieval: 5 options (with constraint: `lightrag_hybrid`/`lightrag_graph` require `kg_extraction`)
+- Post-Retrieval: 4 options
+- Generation: 4 options
 
-**Theoretical: 2 x 7 x 3 x 5 = 210 combinations.**
+**Theoretical: 3 x 2 x 5 x 4 x 4 = 480 combinations (360 after constraint pruning).**
 
-### Practically Meaningful Combinations (14 identified, all tested)
+### Key Configurations (Framework Presets + Cross-Framework)
 
-**HotpotQA (5):**
+| # | Chunking | Query | Retrieval | Post-Retrieval | Generation | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | longrag_4k | identity | bm25 | identity | longrag_reader | LongRAG baseline |
+| 2 | kg_extraction | lightrag_keywords | lightrag_hybrid | lightrag_compress | lightrag_answer | LightRAG baseline |
+| 3 | standard_passage | identity | dense_e5 | selfrag_critique | selfrag_generator | Self-RAG baseline |
+| 4 | standard_passage | identity | bm25 | cross_encoder | longrag_reader | Classic IR pipeline |
+| 5 | standard_passage | identity | bm25_dense_hybrid | cross_encoder | longrag_reader | Hybrid + cross-encoder |
+| 6 | standard_passage | identity | dense_e5 | cross_encoder | simple_llm | Dense + cross-encoder |
+| 7 | kg_extraction | lightrag_keywords | lightrag_hybrid | cross_encoder | lightrag_answer | LightRAG retrieval + cross-encoder |
+| 8 | standard_passage | identity | bm25_dense_hybrid | selfrag_critique | selfrag_generator | Hybrid + SelfRAG scoring |
+| 9 | longrag_4k | identity | dense_e5 | cross_encoder | longrag_reader | LongRAG chunks + dense + CE |
+| 10 | standard_passage | identity | bm25_dense_hybrid | lightrag_compress | lightrag_answer | Hybrid + LLM compression |
 
+Integration tests in `tests/test_all_combinations.py` and `tests/test_retrieval_methods.py`.
 
-| #   | Query    | Retrieval | Reranking | Generation | Notes                                           |
-| --- | -------- | --------- | --------- | ---------- | ----------------------------------------------- |
-| 1   | Identity | HFDataset | Identity  | LongRAG    | Native LongRAG baseline                         |
-| 2   | LightRAG | LightRAG  | LightRAG  | LongRAG    | KG multi-hop retrieval + short answer reader    |
-| 3   | LightRAG | LightRAG  | SelfRAG   | LongRAG    | KG retrieval + evidence scoring + short answer  |
-| 4   | Identity | LightRAG  | SelfRAG   | SelfRAG    | KG chunks -> per-passage scoring -> best answer |
-| 5   | LightRAG | LightRAG  | Identity  | LightRAG   | Full LightRAG on HotpotQA corpus                |
+### Pipeline Topology
 
+All 3 pipeline builders share the same DI signature and produce identical
+4-node topologies. The pipeline frame is inferred from the configuration
+(not an explicit slot):
 
-**UltraDomain (4):**
+| Builder | State Type | DI Signature | Inferred When |
+| --- | --- | --- | --- |
+| `build_graph()` | `LongRAGGraphState` | `(retrieval, generation, reranking=None, query=None)` | Default (BM25/Dense retrieval) |
+| `build_query_graph()` | `LightRAGGraphState` | `(retrieval, generation, reranking=None, query=None)` | `kg_extraction` + `lightrag_*` retrieval |
+| `build_selfrag_modular_graph()` | `SelfRAGModularState` | `(retrieval, generation, reranking=None, query=None)` | `selfrag_critique` + `selfrag_generator` |
 
-
-| #   | Query    | Retrieval | Reranking | Generation | Notes                                             |
-| --- | -------- | --------- | --------- | ---------- | ------------------------------------------------- |
-| 6   | LightRAG | LightRAG  | LightRAG  | LightRAG   | Native LightRAG baseline                          |
-| 7   | LightRAG | LightRAG  | SelfRAG   | LightRAG   | KG retrieval + evidence scoring + detailed answer |
-| 8   | Identity | LightRAG  | Identity  | SelfRAG    | KG chunks -> per-passage scoring -> best answer   |
-| 9   | LightRAG | LightRAG  | Identity  | LongRAG    | KG retrieval + short answer (for EM comparison)   |
-
-
-**ALCE (5):**
-
-
-| #   | Query    | Retrieval | Reranking | Generation | Notes                                               |
-| --- | -------- | --------- | --------- | ---------- | --------------------------------------------------- |
-| 10  | Identity | ALCEDocs  | Identity  | SelfRAG    | Native Self-RAG on pre-retrieved docs               |
-| 11  | Identity | ALCEDocs  | SelfRAG   | LongRAG    | SelfRAG reranks docs, LongRAG extracts answer       |
-| 12  | Identity | ALCEDocs  | SelfRAG   | LightRAG   | SelfRAG reranks, LightRAG generates detailed answer |
-| 13  | LightRAG | LightRAG  | LightRAG  | LightRAG   | LightRAG on ALCE source corpus                      |
-| 14  | Identity | ALCEDocs  | LightRAG  | LongRAG    | LightRAG compression + LongRAG reader on ALCE docs  |
-
-
-All 14 have integration tests in `tests/test_all_combinations.py`.
-
-### Pipeline Structure
-
-All 3 pipelines follow the SAME topology and DI signature:
-
-
-| Pipeline | Builder                         | State Type            | DI Signature                                          |
-| -------- | ------------------------------- | --------------------- | ----------------------------------------------------- |
-| LongRAG  | `build_graph()`                 | `LongRAGGraphState`   | `(retrieval, generation, reranking=None, query=None)` |
-| LightRAG | `build_query_graph()`           | `LightRAGGraphState`  | `(retrieval, generation, reranking=None, query=None)` |
-| Self-RAG | `build_selfrag_modular_graph()` | `SelfRAGModularState` | `(retrieval, generation, reranking=None, query=None)` |
-
-
-Identical DI interface means any combination is structurally possible across all 3 pipeline frames.
+Identical DI interface means any component combination is structurally possible across all 3 pipeline frames.
 
 ---
 
@@ -294,35 +315,41 @@ class Query(Protocol):
 
 ### Stage 4 -- Retrieval
 
-First-stage retrieval of candidate chunks.
+First-stage retrieval of candidate chunks from an indexed corpus.
 
 ```python
 class Retrieval(Protocol):
     def retrieve(self, queries: list[str], top_k: int = 10) -> list[RetrievalResult]: ...
 ```
 
-**Real implementations:**
+**Real retrieval methods** (comparable, used in search space):
 
-- `HFDatasetRetrieval` -- pre-joined 4K context from HuggingFace dataset
-- `LightRAGRetrieval` -- hybrid vector+KG retrieval across 4 stores. Accepts pre-computed query results to avoid redundant LLM calls.
-- `SelfRAGRetrieval` -- Contriever-encoded query + VectorStore cosine search
-- `LLMRetrieval` -- asks an LLM to generate background context
-- `DuckDuckGoRetrieval` -- web search via DuckDuckGo
-- `FallbackRetrieval` -- chains primary + fallback retrieval
-- `ALCEDocRetrieval` -- wraps ALCE pre-retrieved documents as a Retrieval component
+- `BM25Retrieval` -- lexical matching via BM25Okapi (`rank_bm25` library). CPU-only, fast, interpretable.
+- `DenseRetrieval` -- semantic matching via `intfloat/multilingual-e5-small` (sentence-transformers). 118M params, CPU-friendly.
+- `HybridRetrieval` -- reciprocal rank fusion of BM25 + Dense. Surveys consistently show hybrid > either alone.
+- `LightRAGRetrieval` -- hybrid vector+KG retrieval across 4 stores (chunks, entities, relations, graph). Requires KG-extracted index.
 
-### Stage 5 -- Reranking
+**Utility / benchmark scaffolding** (not comparable, not in search space):
 
-Second-stage reordering or filtering of retrieval candidates.
+- `HFDatasetRetrieval` -- pre-joined 4K context lookup from HuggingFace dataset (benchmark scaffolding)
+- `ALCEDocRetrieval` -- wraps ALCE pre-retrieved documents (benchmark scaffolding)
+- `LLMRetrieval` -- asks an LLM to fabricate background context (no corpus search)
+- `DuckDuckGoRetrieval` -- web search via DuckDuckGo (no local corpus)
+- `FallbackRetrieval` -- chains primary + fallback retrieval (combinator)
+
+### Stage 5 -- Post-Retrieval
+
+Second-stage processing of retrieval candidates: reranking, compression, or critique scoring.
 
 ```python
 class Reranking(Protocol):
     def rerank(self, query: str, results: list[RetrievalResult], top_k: int = 10) -> list[RetrievalResult]: ...
 ```
 
-**Real implementations:**
+**Implementations:**
 
-- `LightRAGReranking` -- LLM context compression into a focused evidence brief
+- `CrossEncoderReranking` -- cross-encoder re-scoring via `cross-encoder/ms-marco-MiniLM-L-12-v2` (sentence-transformers). The standard reranking baseline.
+- `LightRAGReranking` -- LLM context compression into a focused evidence brief. NOTE: This is context compression, not traditional cross-encoder reranking.
 - `SelfRAGReranking` -- generates per-passage answers with logprob-based scoring (ISREL, ISSUP, ISUSE). Caches predictions in `metadata["_selfrag_pred"]` for downstream reuse.
 - `IdentityReranking` -- returns results unchanged, truncated to `top_k`
 
@@ -344,7 +371,7 @@ class Generation(Protocol):
 
 ---
 
-## Self-RAG: The Reranking-Generation Cache
+## Self-RAG: The Post-Retrieval / Generation Cache
 
 Self-RAG's scoring mechanism is fundamentally different from standard rerankers.
 For each retrieved passage, the LLM generates a candidate answer and scores it
@@ -512,7 +539,7 @@ python -m uct_engine.examples.rag_pipeline_search          # simulated rewards
 python -m uct_engine.examples.rag_pipeline_search --real    # real pipeline evaluation
 ```
 
-Searches over the 4-slot configuration space (query x retrieval x reranking x generation) across 3 benchmark datasets using Monte Carlo tree search with cost-aware scoring.
+Searches over the 5-dimension configuration space (chunking x query x retrieval x post_retrieval x generation) across 3 benchmark datasets using Monte Carlo tree search with cost-aware scoring. Hard constraint pruning ensures `lightrag_hybrid`/`lightrag_graph` are only paired with `kg_extraction` chunking.
 
 ### Real-LLM Benchmark Demo (HotpotQA / ALCE / UltraDomain)
 
@@ -623,8 +650,11 @@ ominirag/
 |   +-- types.py                     #   Document, Chunk, RetrievalResult, GenerationResult, QueryContext
 |   +-- protocols.py                 #   Chunking, Embedding, Query, Retrieval, Reranking, Generation
 |   +-- identity.py                  #   Identity* passthrough implementations
-|   +-- common_components.py         #   LLMRetrieval, DuckDuckGoRetrieval, FallbackRetrieval,
-|   |                                #   ALCEDocRetrieval, SimpleLLMGeneration
+|   +-- retrieval_methods.py         #   BM25Retrieval, DenseRetrieval, HybridRetrieval, CorpusIndex
+|   +-- reranking_methods.py         #   CrossEncoderReranking
+|   +-- common_components.py         #   Utility: LLMRetrieval, DuckDuckGoRetrieval, FallbackRetrieval,
+|   |                                #   ALCEDocRetrieval, SimpleLLMGeneration (NOT comparable retrieval)
+|   +-- component_registry.py        #   Canonical config-to-component builder (single source of truth)
 |   +-- __init__.py
 |
 +-- longRAG_example/
@@ -668,10 +698,19 @@ ominirag/
 |
 +-- AG-UCT/uct_engine/
 |   +-- examples/
-|       +-- rag_pipeline_search.py   #   UCT search over 4-slot RAG config space
+|       +-- rag_pipeline_search.py   #   UCT search over 5-dimension RAG config space
 |                                    #   build_pipeline_from_config() maps to real adapters
 |
++-- ominirag_wtb/                    # WTB integration layer for cache-aware evaluation
+|   +-- config_types.py              #   RAGConfig, BenchmarkQuestion, WorkItem, VALID_* sets
+|   +-- graph_factories.py           #   config_to_graph_factory(), frame inference
+|   +-- batch_runner.py              #   run_batch_with_reuse() orchestration
+|   +-- cache_aware_evaluator.py     #   AG-UCT Evaluator ABC bridge to WTB execution
+|   +-- reuse_ledger.py              #   ReuseLedger, MaterializedEntry for bipartite cache
+|   +-- __init__.py                  #   Public API exports
+|
 +-- benchmark/
+|   +-- base_adapter.py              #   Shared helpers: sample_chunks_to_retrieval_results, invoke_graph_sync
 |   +-- hotpotqa_adapter.py          #   HotpotQA evaluation (EM/F1)
 |   +-- ultradomain_adapter.py       #   UltraDomain evaluation (LLM-judge)
 |   +-- alce_adapter.py              #   ALCE evaluation (F1/STR-EM), supports graph_factory
@@ -700,7 +739,8 @@ ominirag/
 |
 +-- tests/
 |   +-- test_rag_contracts.py        #   Protocol + type tests
-|   +-- test_all_combinations.py     #   All 14 benchmark-specific combinations
+|   +-- test_retrieval_methods.py    #   BM25/Dense/Hybrid/CrossEncoder on sample_data
+|   +-- test_all_combinations.py     #   Benchmark-specific combinations
 |   +-- test_cross_project_swap.py   #   Cross-project swaps via LangGraph
 |   +-- test_lightrag_cross_swap.py  #   LightRAG cross-framework swaps
 |   +-- test_selfrag_cache.py        #   SelfRAG reranking/generation cache
@@ -731,10 +771,12 @@ diagnostic signal and a smoke test.
 
 Things that are **not** real yet, tracked as gaps:
 
-- LongRAG's full Wikipedia 4K-chunk corpus is wired through `HFDatasetRetrieval` but the adapter currently returns a single concatenated context per query; per-chunk retrieval against the full Wikipedia index is not exercised by any demo.
-- LightRAG's KG indexer (`build_index_graph()`) builds against the small KG sample by default; building against a full UltraDomain corpus requires a separate indexing run that no demo automates yet.
-- Self-RAG's logprob scoring (ISREL/ISSUP/ISUSE) requires a local vLLM model with `selfrag_llama2_7b` weights. The cross-project demos shim `vllm`/`torch` so the *interface* is exercised, but the scoring numbers in those demos are illustrative, not from a real Self-RAG checkpoint.
-- ALCE's heavy metrics (AutoAIS NLI, MAUVE, QA-pipeline) need GPU models and are intentionally skipped; the adapter only computes the lightweight metrics (F1, EM, STR-EM, citation strip).
+- BM25 / Dense / Hybrid retrieval methods are implemented and tested on KG sample data (5-10 chunks). Full-corpus indexing against Wikipedia or UltraDomain requires a separate offline step.
+- CrossEncoder reranking downloads the model on first use (~50MB). It runs on CPU but is slower than BM25.
+- LongRAG's full Wikipedia 4K-chunk corpus is wired through `HFDatasetRetrieval` (benchmark scaffolding) but real retrieval should use `BM25Retrieval` or `DenseRetrieval` over indexed chunks.
+- LightRAG's KG indexer (`build_index_graph()`) builds against the small KG sample by default; building against a full UltraDomain corpus requires a separate indexing run.
+- Self-RAG's logprob scoring (ISREL/ISSUP/ISUSE) requires a local vLLM model with `selfrag_llama2_7b` weights. Cross-project demos shim `vllm`/`torch` so the *interface* is exercised, but scores are illustrative.
+- ALCE's heavy metrics (AutoAIS NLI, MAUVE, QA-pipeline) need GPU models and are intentionally skipped.
 
 ---
 

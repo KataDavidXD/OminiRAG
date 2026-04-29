@@ -14,6 +14,7 @@ from typing import Any
 
 from rag_contracts import GenerationResult, RetrievalResult
 
+from benchmark.base_adapter import invoke_graph_sync
 from bsamp.scoring import (
     ASQAEvaluator,
     QampariEvaluator,
@@ -178,22 +179,11 @@ class ALCEBenchmarkAdapter:
         max_docs: int = 5,
     ) -> ALCEEvaluationResult:
         """Run an entire LangGraph pipeline per item and compute metrics."""
-        import asyncio
-
         from rag_contracts import ALCEDocRetrieval
 
         is_factory = callable(graph_or_factory) and not hasattr(
             graph_or_factory, "ainvoke"
         )
-
-        def _invoke_graph(g, payload):
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                return asyncio.run(g.ainvoke(payload))
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(1) as pool:
-                return pool.submit(asyncio.run, g.ainvoke(payload)).result()
 
         evaluator = ASQAEvaluator()
         scored_items: list[dict] = []
@@ -208,7 +198,7 @@ class ALCEBenchmarkAdapter:
             else:
                 graph = graph_or_factory
 
-            state = _invoke_graph(graph, {"query": question})
+            state = invoke_graph_sync(graph, {"query": question})
 
             gen_result: GenerationResult = state.get("generation_result", GenerationResult(output=""))
             output = gen_result.output.strip()
@@ -365,22 +355,11 @@ class QampariBenchmarkAdapter:
         max_docs: int = 5,
     ) -> QampariEvaluationResult:
         """Run an entire LangGraph pipeline per item and compute QAMPARI metrics."""
-        import asyncio
-
         from rag_contracts import ALCEDocRetrieval
 
         is_factory = callable(graph_or_factory) and not hasattr(
             graph_or_factory, "ainvoke"
         )
-
-        def _invoke_graph(g, payload):
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                return asyncio.run(g.ainvoke(payload))
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(1) as pool:
-                return pool.submit(asyncio.run, g.ainvoke(payload)).result()
 
         evaluator = QampariEvaluator()
         scored_items: list[dict] = []
@@ -395,7 +374,7 @@ class QampariBenchmarkAdapter:
             else:
                 graph = graph_or_factory
 
-            state = _invoke_graph(graph, {"query": question})
+            state = invoke_graph_sync(graph, {"query": question})
 
             gen_result: GenerationResult = state.get("generation_result", GenerationResult(output=""))
             output = gen_result.output.strip()

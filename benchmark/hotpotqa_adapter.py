@@ -17,6 +17,10 @@ from typing import Any
 
 from rag_contracts import GenerationResult, RetrievalResult
 
+from benchmark.base_adapter import (
+    invoke_graph_sync,
+    sample_chunks_to_retrieval_results,
+)
 from bsamp.scoring import (
     HotpotQAEvaluator,
     compute_exact,
@@ -87,19 +91,6 @@ def load_hotpotqa_jsonl(path: str | Path) -> list[dict]:
     return items
 
 
-def sample_chunks_to_retrieval_results(chunks: dict) -> list[RetrievalResult]:
-    """Convert KG sample chunks dict to RetrievalResult list."""
-    results = []
-    for cid, info in chunks.items():
-        doc_ids = info.get("doc_ids", [])
-        results.append(RetrievalResult(
-            source_id=cid,
-            content=info.get("content", ""),
-            score=1.0,
-            title=doc_ids[0] if doc_ids else cid,
-            metadata={"doc_ids": doc_ids},
-        ))
-    return results
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -184,19 +175,17 @@ class HotpotQABenchmarkAdapter:
         graph: Any,
     ) -> HotpotQAEvaluationResult:
         """Run an entire LangGraph pipeline per item and compute EM/F1."""
-        import asyncio
-
         evaluator = HotpotQAEvaluator()
         scored_items: list[dict] = []
 
         for item in data:
             question = item["question"]
-            state = asyncio.run(graph.ainvoke({
+            state = invoke_graph_sync(graph, {
                 "query": question,
                 "query_id": item.get("query_id", ""),
                 "answers": [item.get("answer", "")],
                 "test_data_name": "hotpotqa",
-            }))
+            })
 
             gen_result: GenerationResult = state.get(
                 "generation_result", GenerationResult(output="")

@@ -172,12 +172,13 @@ class RAGCacheAwareEvaluator:
     # ------------------------------------------------------------------
 
     def _simulated_reward(self, config: RAGConfig, cluster_id: str) -> float:
-        choices_4 = (config.query, config.retrieval, config.reranking, config.generation)
-        if choices_4 in self.reward_table:
-            return self.reward_table[choices_4]
         full = config.slots()
         if full in self.reward_table:
             return self.reward_table[full]
+        # Try suffix without chunking for backward compat
+        suffix = full[1:]
+        if suffix in self.reward_table:
+            return self.reward_table[suffix]
         return self.default_reward
 
     # ------------------------------------------------------------------
@@ -212,36 +213,77 @@ class RAGCacheAwareEvaluator:
         questions: List[BenchmarkQuestion],
         cluster_id: str,
     ) -> float:
-        """Score execution results through the appropriate benchmark adapter."""
+        """Score execution results through the appropriate benchmark adapter.
+
+        Extracts ``generation_result`` from the WTB execution's final state
+        (stored under ``current_state`` by ``batch_runner``), then scores
+        through the standard benchmark adapter.
+        """
+        from rag_contracts import GenerationResult
+
+        def _extract_gen_result(r: Dict[str, Any]) -> GenerationResult:
+            state = r.get("current_state") or {}
+            gr = state.get("generation_result")
+            if isinstance(gr, GenerationResult):
+                return gr
+            if isinstance(gr, dict):
+                return GenerationResult(
+                    output=gr.get("output", ""),
+                    citations=gr.get("citations", []),
+                    metadata=gr.get("metadata", {}),
+                )
+            return GenerationResult(output=state.get("result", ""))
+
         try:
             if cluster_id == "hotpotqa":
                 from benchmark.hotpotqa_adapter import HotpotQABenchmarkAdapter
-                adapter = HotpotQABenchmarkAdapter()
-                eval_items = []
+                from bsamp.scoring import HotpotQAEvaluator
+                evaluator = HotpotQAEvaluator()
+                scored_items: list = []
                 for q, r in zip(questions, results):
-                    eval_items.append({
+                    gr = _extract_gen_result(r)
+                    answer = q.target.get("answer", "")
+                    scored_items.append({
+                        "prediction": gr.output.strip(),
+                        "answer": answer,
                         "question": q.question,
-                        "answer": q.target.get("answer", ""),
                         "query_id": q.question_id,
-                        "generation_result": r.get("generation_result"),
                     })
-                if hasattr(adapter, "score_generation_results"):
-                    result = adapter.score_generation_results(eval_items)
-                    return result.avg_f1 / 100.0
-            elif cluster_id == "alce":
-                from benchmark.alce_adapter import ALCEBenchmarkAdapter
-                adapter = ALCEBenchmarkAdapter()
-                eval_items = []
+                result = evaluator.score_batch(scored_items)
+                return result.aggregate.get("avg_f1", 0.0) / 100.0
+
+            elif cluster_id == "ultradomain":
+                from bsamp.scoring import UltraDomainEvaluator
+                evaluator = UltraDomainEvaluator()
+                scored_items = []
                 for q, r in zip(questions, results):
-                    eval_items.append({
-                        "question": q.question,
+                    gr = _extract_gen_result(r)
+                    scored_items.append({
+                        "prediction": gr.output.strip(),
                         "answer": q.target.get("answer", ""),
-                        "docs": q.payload.get("docs", []),
-                        "generation_result": r.get("generation_result"),
+                        "question": q.question,
+                        "domain": q.metadata.get("domain", "general"),
+                        "query_id": q.question_id,
                     })
-                if hasattr(adapter, "score_generation_results"):
-                    result = adapter.score_generation_results(eval_items)
-                    return result.avg_f1 / 100.0
+                result = evaluator.score_batch(scored_items)
+                return result.aggregate.get("avg_f1", 0.0) / 100.0
+
+            elif cluster_id == "alce":
+                from bsamp.scoring import ASQAEvaluator
+                evaluator = ASQAEvaluator()
+                scored_items = []
+                for q, r in zip(questions, results):
+                    gr = _extract_gen_result(r)
+                    scored_items.append({
+                        "prediction": gr.output.strip(),
+                        "answer": q.target.get("answer", ""),
+                        "question": q.question,
+                        "qa_pairs": q.target.get("qa_pairs"),
+                        "query_id": q.question_id,
+                    })
+                result = evaluator.score_batch(scored_items)
+                return result.aggregate.get("avg_f1", 0.0) / 100.0
+
         except Exception as exc:
             logger.warning("Scoring failed for %s: %s", cluster_id, exc)
 

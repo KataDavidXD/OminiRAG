@@ -231,8 +231,8 @@ class ReuseLedger:
         checkpoint is expected to have at least ``id`` (or ``checkpoint_id``)
         and ``step`` keys.
 
-        Depth 1 corresponds to after the frame selection (no node executed),
-        depths 2-5 correspond to after query/retrieval/reranking/generation.
+        Depth 1 corresponds to after the chunking selection (no node executed),
+        depths 2-5 correspond to after query/retrieval/post_retrieval/generation.
         """
         entries: List[MaterializedEntry] = []
         for depth in range(1, 6):

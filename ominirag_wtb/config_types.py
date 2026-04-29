@@ -1,9 +1,12 @@
 """
 Data types for the WTB x OminiRAG bipartite cache-reuse system.
 
-RAGConfig     -- 5-slot pipeline configuration (frame is an explicit slot)
+RAGConfig     -- 5-slot pipeline configuration (new taxonomy)
 BenchmarkQuestion -- question identity + payload for cache keying
 WorkItem      -- binding of (config, question, reuse depth) for batch scheduling
+
+Taxonomy (5 dimensions):
+  chunking -> query -> retrieval -> post_retrieval -> generation
 """
 
 from __future__ import annotations
@@ -13,56 +16,76 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Hashable, Optional, Tuple
 
-# Canonical node execution order shared by all three pipeline frames.
+# Canonical node execution order shared by all pipeline topologies.
 NODE_ORDER: Tuple[str, ...] = (
     "query_processing",
     "retrieval",
-    "reranking",
+    "post_retrieval",
     "generation",
 )
 
-VALID_FRAMES = frozenset({"longrag", "lightrag", "selfrag"})
+VALID_CHUNKING = frozenset({
+    "standard_passage", "longrag_4k", "kg_extraction",
+})
 
 VALID_QUERY = frozenset({
     "identity", "lightrag_keywords",
 })
 
 VALID_RETRIEVAL = frozenset({
-    "longrag_dataset", "lightrag_hybrid", "lightrag_chunk",
-    "lightrag_graph", "selfrag_contriever", "llm_context",
-    "duckduckgo", "fallback", "alce_docs",
+    "bm25", "dense_e5", "bm25_dense_hybrid",
+    "lightrag_hybrid", "lightrag_graph",
 })
 
-VALID_RERANKING = frozenset({
-    "identity", "lightrag_compress", "selfrag_evidence",
+VALID_POST_RETRIEVAL = frozenset({
+    "identity", "cross_encoder", "lightrag_compress", "selfrag_critique",
 })
 
 VALID_GENERATION = frozenset({
-    "longrag_reader", "lightrag_answer", "selfrag_generator",
-    "identity", "simple_llm",
+    "longrag_reader", "lightrag_answer", "selfrag_generator", "simple_llm",
 })
+
+# Hard constraint: these retrieval methods require kg_extraction chunking
+CHUNKING_RETRIEVAL_CONSTRAINTS: Dict[str, str] = {
+    "lightrag_hybrid": "kg_extraction",
+    "lightrag_graph": "kg_extraction",
+}
+
+# Legacy name mappings for backward compatibility
+_LEGACY_FRAME_TO_CHUNKING = {
+    "longrag": "longrag_4k",
+    "lightrag": "kg_extraction",
+    "selfrag": "standard_passage",
+}
+_LEGACY_RETRIEVAL = {
+    "longrag_dataset": "bm25",
+    "lightrag_chunk": "lightrag_hybrid",
+}
+_LEGACY_RERANKING = {
+    "selfrag_evidence": "selfrag_critique",
+}
 
 
 @dataclass(frozen=True)
 class RAGConfig:
     """A fully-specified RAG pipeline configuration.
 
-    Five slots: frame selects the LangGraph pipeline builder; the remaining
-    four select protocol-compliant adapter components injected via DI.
+    Five dimensions aligned with RAG survey taxonomy:
+    chunking -> query -> retrieval -> post_retrieval -> generation
 
     The tuple order matches the LangGraph node execution order so that
     ``prefix(d)`` corresponds to the state after executing the first *d*
     pipeline stages.
     """
 
-    frame: str
+    chunking: str
     query: str
     retrieval: str
-    reranking: str
+    post_retrieval: str
     generation: str
 
     def slots(self) -> Tuple[str, ...]:
-        return (self.frame, self.query, self.retrieval, self.reranking, self.generation)
+        return (self.chunking, self.query, self.retrieval, self.post_retrieval, self.generation)
 
     def prefix(self, depth: int) -> Tuple[str, ...]:
         """Return the first *depth* slot values (0 <= depth <= 5)."""
@@ -80,8 +103,15 @@ class RAGConfig:
     def from_tuple(cls, t: Tuple[str, ...]) -> "RAGConfig":
         if len(t) != 5:
             raise ValueError(f"Expected 5-tuple, got {len(t)}: {t}")
-        return cls(frame=t[0], query=t[1], retrieval=t[2],
-                   reranking=t[3], generation=t[4])
+        # Detect legacy format: first element is an old frame name
+        if t[0] in _LEGACY_FRAME_TO_CHUNKING:
+            chunking = _LEGACY_FRAME_TO_CHUNKING[t[0]]
+            retrieval = _LEGACY_RETRIEVAL.get(t[2], t[2])
+            post_ret = _LEGACY_RERANKING.get(t[3], t[3])
+            return cls(chunking=chunking, query=t[1], retrieval=retrieval,
+                       post_retrieval=post_ret, generation=t[4])
+        return cls(chunking=t[0], query=t[1], retrieval=t[2],
+                   post_retrieval=t[3], generation=t[4])
 
 
 @dataclass(frozen=True)
