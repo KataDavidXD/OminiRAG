@@ -1,7 +1,8 @@
 """AG-UCT SearchState + Evaluator for the 3-framework RAG configuration space.
 
-Search space
-------------
+Search space (5 slots -- frame is explicit, not a heuristic)
+-------------------------------------------------------------
+  frame      : longrag | lightrag | selfrag
   query      : identity | lightrag_keywords
   retrieval  : longrag_dataset | lightrag_hybrid | lightrag_chunk | lightrag_graph
   reranking  : identity | lightrag_compress | selfrag_evidence
@@ -11,10 +12,15 @@ The evaluator uses simulated rewards by default.  When ``--real`` is passed,
 ``build_pipeline_from_config()`` maps slot values to actual adapter instances
 and evaluates against real benchmark adapters.
 
+When ``--wtb-reuse`` is passed, the search uses the ``RAGCacheAwareEvaluator``
+from ``ominirag_wtb`` which physically caches intermediate LangGraph states
+via WTB and forks from shared prefixes to avoid redundant computation.
+
 Run::
 
-    python -m uct_engine.examples.rag_pipeline_search           # simulated
-    python -m uct_engine.examples.rag_pipeline_search --real    # real pipeline
+    python -m uct_engine.examples.rag_pipeline_search                     # simulated
+    python -m uct_engine.examples.rag_pipeline_search --real              # real pipeline
+    python -m uct_engine.examples.rag_pipeline_search --wtb-reuse         # with WTB reuse
 """
 
 from __future__ import annotations
@@ -36,12 +42,15 @@ from uct_engine import (
 
 
 # ---------------------------------------------------------------------------
-# Configuration space: 4 slots x multiple options per slot
+# Configuration space: 5 slots x multiple options per slot
+# Frame is an explicit slot -- not derived from component names.
 # ---------------------------------------------------------------------------
 
-SLOT_NAMES: list[str] = ["query", "retrieval", "reranking", "generation"]
+SLOT_NAMES: list[str] = ["frame", "query", "retrieval", "reranking", "generation"]
 
 SLOT_OPTIONS: list[list[str]] = [
+    # Frame (pipeline builder)
+    ["longrag", "lightrag", "selfrag"],
     # Query
     ["identity", "lightrag_keywords"],
     # Retrieval
@@ -52,16 +61,27 @@ SLOT_OPTIONS: list[list[str]] = [
     ["longrag_reader", "lightrag_answer", "selfrag_generator"],
 ]
 
+# Backward-compatible 4-slot names for existing reward tables
+SLOT_NAMES_4: list[str] = ["query", "retrieval", "reranking", "generation"]
+
 # Component costs: approximate LLM call counts per query
 COMPONENT_COSTS: dict[str, float] = {
+    # Frame selection (no compute, just topology choice)
+    "longrag":            0.0,
+    "lightrag":           0.0,
+    "selfrag":            0.0,
+    # Query
     "identity":           0.0,
     "lightrag_keywords":  1.0,   # 1 LLM call for keyword extraction
+    # Retrieval
     "longrag_dataset":    0.0,   # pre-computed lookup
     "lightrag_hybrid":    1.0,   # embedding call
     "lightrag_chunk":     1.0,
     "lightrag_graph":     1.0,
+    # Reranking
     "lightrag_compress":  1.0,   # 1 LLM call for compression
     "selfrag_evidence":   0.5,   # scoring is lighter than generation
+    # Generation
     "longrag_reader":     1.0,   # 1 LLM call
     "lightrag_answer":    1.0,   # 1 LLM call
     "selfrag_generator":  1.5,   # generate + score
@@ -107,6 +127,11 @@ INCOMPATIBLE: set[tuple[str, str]] = set()
 def _compute_reward(choices: tuple[str, ...]) -> float:
     if choices in REWARD_TABLE:
         return REWARD_TABLE[choices]
+    # Fall back: check if the 4-component suffix matches (for backward compat)
+    if len(choices) == 5:
+        suffix = choices[1:]
+        if suffix in REWARD_TABLE:
+            return REWARD_TABLE[suffix]
     base = DEFAULT_REWARD
     for component in choices:
         base += COMPONENT_COSTS.get(component, 0.0) * 0.02
@@ -320,12 +345,21 @@ def build_pipeline_from_config(
 ) -> dict[str, Any]:
     """Build a dict of rag_contracts components from a UCT config tuple.
 
-    Returns ``{"query": ..., "retrieval": ..., "reranking": ..., "generation": ...}``.
+    Accepts both 4-tuples ``(query, retrieval, reranking, generation)``
+    and 5-tuples ``(frame, query, retrieval, reranking, generation)``.
+
+    Returns ``{"query": ..., "retrieval": ..., "reranking": ...,
+    "generation": ..., "frame": ...}``.
     Raises ImportError if required packages are not installed.
     """
     from rag_contracts import IdentityQuery, IdentityReranking, IdentityGeneration, SimpleLLMGeneration
 
-    query_name, retrieval_name, reranking_name, generation_name = choices
+    if len(choices) == 5:
+        frame_name = choices[0]
+        query_name, retrieval_name, reranking_name, generation_name = choices[1:]
+    else:
+        frame_name = "longrag"
+        query_name, retrieval_name, reranking_name, generation_name = choices
     components: dict[str, Any] = {}
 
     if query_name == "identity":
@@ -364,6 +398,7 @@ def build_pipeline_from_config(
         _, selfrag_gen = _build_selfrag_components()
         components["generation"] = selfrag_gen if selfrag_gen else IdentityGeneration()
 
+    components["frame"] = frame_name
     return components
 
 
@@ -641,7 +676,7 @@ class RAGPipelineEvaluator(Evaluator):
                 frozen = self.frozen_samples.get(cid)
                 reward = evaluate_config_real(choices, benchmark=cid, frozen_sample=frozen)
             else:
-                reward = _compute_reward(choices) + CLUSTER_NOISE[cid]
+                reward = _compute_reward(choices) + CLUSTER_NOISE.get(cid, 0.0)
                 for component in choices:
                     reward += DATASET_AFFINITY.get((component, cid), 0.0)
 
@@ -679,6 +714,46 @@ class RAGPipelineEvaluator(Evaluator):
 
 
 # ---------------------------------------------------------------------------
+# WTB Cache-Aware Evaluator factory
+# ---------------------------------------------------------------------------
+
+def _build_wtb_evaluator(
+    use_real: bool = False,
+    frozen_samples: dict[str, list] | None = None,
+) -> "Evaluator":
+    """Build a ``RAGCacheAwareEvaluator`` backed by a WTB bench + ledger."""
+    import tempfile
+    from ominirag_wtb import RAGCacheAwareEvaluator, ReuseLedger
+
+    tmp = tempfile.mkdtemp(prefix="wtb_reuse_")
+    ledger = ReuseLedger(db_path=str(__import__("pathlib").Path(tmp) / "reuse_ledger.db"))
+
+    bench = None
+    if use_real:
+        from wtb.sdk import WTBTestBench
+        bench = WTBTestBench.create(mode="development", data_dir=tmp)
+
+    bq_samples: dict[str, list] = {}
+    if frozen_samples:
+        from ominirag_wtb.config_types import BenchmarkQuestion
+        for cid, items in frozen_samples.items():
+            bq_samples[cid] = [
+                BenchmarkQuestion.from_benchmark_item(it, cid) for it in items
+            ]
+
+    return RAGCacheAwareEvaluator(
+        ledger=ledger,
+        bench=bench,
+        cluster_ids=CLUSTER_IDS,
+        frozen_samples=bq_samples,
+        cluster_costs=CLUSTER_COST,
+        use_real=use_real,
+        reward_table=REWARD_TABLE,
+        default_reward=DEFAULT_REWARD,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -688,6 +763,8 @@ def main() -> None:
     parser.add_argument("--real", action="store_true", help="Use real pipeline evaluation (sample_data)")
     parser.add_argument("--use-hf", action="store_true",
                         help="Use HuggingFace datasets via SamplingEngine (implies --real)")
+    parser.add_argument("--wtb-reuse", action="store_true",
+                        help="Use WTB cache-aware evaluator with bipartite reuse ledger")
     parser.add_argument("--budget", type=int, default=30,
                         help="Per-cluster sample budget when --use-hf is set (default: 30)")
     parser.add_argument("--max-iterations", type=int, default=500)
@@ -705,7 +782,12 @@ def main() -> None:
         if not frozen_samples:
             print("  WARNING: No HF datasets found locally. Falling back to sample_data.", flush=True)
 
-    evaluator = RAGPipelineEvaluator(use_real=use_real, frozen_samples=frozen_samples)
+    if args.wtb_reuse:
+        evaluator = _build_wtb_evaluator(
+            use_real=use_real, frozen_samples=frozen_samples,
+        )
+    else:
+        evaluator = RAGPipelineEvaluator(use_real=use_real, frozen_samples=frozen_samples)
     scorer = CostAwareUCTScorer(lambda_t=0.05)
     clusters = [
         ClusterDef(cid, weight=1.0, base_cost=CLUSTER_COST[cid])
