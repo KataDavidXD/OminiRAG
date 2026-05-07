@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 import traceback
@@ -48,39 +49,9 @@ def record(name: str, status: str, detail: str = "") -> None:
 # ---------------------------------------------------------------------------
 # Graph factories (SDK-only, minimal LangGraph)
 # ---------------------------------------------------------------------------
-
-def _create_linear_graph():
-    """3-node linear graph: A -> B -> C."""
-    from typing import TypedDict
-    from langgraph.graph import StateGraph, END
-
-    class St(TypedDict):
-        messages: list
-        count: int
-        result: str
-
-    def node_a(state: Dict[str, Any]) -> dict:
-        return {"messages": state.get("messages", []) + ["A"],
-                "count": state.get("count", 0) + 1}
-
-    def node_b(state: Dict[str, Any]) -> dict:
-        return {"messages": state.get("messages", []) + ["B"],
-                "count": state.get("count", 0) + 1}
-
-    def node_c(state: Dict[str, Any]) -> dict:
-        msgs = state.get("messages", []) + ["C"]
-        return {"messages": msgs, "count": state.get("count", 0) + 1,
-                "result": ",".join(msgs)}
-
-    g = StateGraph(St)
-    g.add_node("node_a", node_a)
-    g.add_node("node_b", node_b)
-    g.add_node("node_c", node_c)
-    g.add_edge("__start__", "node_a")
-    g.add_edge("node_a", "node_b")
-    g.add_edge("node_b", "node_c")
-    g.add_edge("node_c", END)
-    return g
+# Imported from wtb.sdk so that Ray actors can resolve __module__ to a real
+# importable path (not "__main__").
+from wtb.sdk._example_graphs import create_linear_graph as _create_linear_graph
 
 
 _INIT_STATE: Dict[str, Any] = {"messages": [], "count": 0, "result": ""}
@@ -292,11 +263,9 @@ def check_ray_batch(skip: bool = False) -> None:
     import tempfile, shutil
 
     tmp = tempfile.mkdtemp(prefix="wtb_ray_")
+    os.environ["WTB_RAY_STORAGE_ROOT"] = os.path.join(tmp, "ray_actors")
     try:
         from wtb.sdk import WTBTestBench, WorkflowProject, ExecutionConfig, RayConfig
-
-        if not ray.is_initialized():
-            ray.init(num_cpus=2, ignore_reinit_error=True, log_to_driver=False)
 
         bench = WTBTestBench.create(
             mode="development",
@@ -328,6 +297,7 @@ def check_ray_batch(skip: bool = False) -> None:
         record("ray batch", FAIL, str(exc))
         traceback.print_exc()
     finally:
+        os.environ.pop("WTB_RAY_STORAGE_ROOT", None)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -346,11 +316,9 @@ def check_ray_batch_cache_metadata(skip: bool = False) -> None:
     import tempfile, shutil
 
     tmp = tempfile.mkdtemp(prefix="wtb_ray_cache_")
+    os.environ["WTB_RAY_STORAGE_ROOT"] = os.path.join(tmp, "ray_actors")
     try:
         from wtb.sdk import WTBTestBench, WorkflowProject, ExecutionConfig, RayConfig
-
-        if not ray.is_initialized():
-            ray.init(num_cpus=2, ignore_reinit_error=True, log_to_driver=False)
 
         bench = WTBTestBench.create(
             mode="development",
@@ -401,6 +369,7 @@ def check_ray_batch_cache_metadata(skip: bool = False) -> None:
         record("ray cache metadata", FAIL, str(exc))
         traceback.print_exc()
     finally:
+        os.environ.pop("WTB_RAY_STORAGE_ROOT", None)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -421,11 +390,9 @@ def check_ray_batch_rollback_fork_cache(skip: bool = False) -> None:
     import tempfile, shutil
 
     tmp = tempfile.mkdtemp(prefix="wtb_ray_rbfk_")
+    os.environ["WTB_RAY_STORAGE_ROOT"] = os.path.join(tmp, "ray_actors")
     try:
         from wtb.sdk import WTBTestBench, WorkflowProject, ExecutionConfig, RayConfig
-
-        if not ray.is_initialized():
-            ray.init(num_cpus=2, ignore_reinit_error=True, log_to_driver=False)
 
         bench = WTBTestBench.create(
             mode="development",
@@ -495,6 +462,7 @@ def check_ray_batch_rollback_fork_cache(skip: bool = False) -> None:
         record("ray cache fork", SKIP, "blocked by rollback failure")
         traceback.print_exc()
     finally:
+        os.environ.pop("WTB_RAY_STORAGE_ROOT", None)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -575,9 +543,26 @@ def main() -> int:
 
     # ── Tier 2: Ray ──────────────────────────────────────────────────────
     print("\n  --- Tier 2: Ray Distributed ---\n")
-    check_ray_batch(skip=args.skip_ray)
-    check_ray_batch_cache_metadata(skip=args.skip_ray)
-    check_ray_batch_rollback_fork_cache(skip=args.skip_ray)
+    _orig_cwd = os.getcwd()
+    _ray_tmp = None
+    if not args.skip_ray:
+        try:
+            import ray
+            import tempfile as _tf
+            _ray_tmp = _tf.mkdtemp(prefix="wtb_ray_main_")
+            os.chdir(_ray_tmp)
+            ray.init(num_cpus=2, ignore_reinit_error=True, log_to_driver=False)
+        except ImportError:
+            pass
+    try:
+        check_ray_batch(skip=args.skip_ray)
+        check_ray_batch_cache_metadata(skip=args.skip_ray)
+        check_ray_batch_rollback_fork_cache(skip=args.skip_ray)
+    finally:
+        os.chdir(_orig_cwd)
+        if _ray_tmp:
+            import shutil as _sh
+            _sh.rmtree(_ray_tmp, ignore_errors=True)
 
     # ── Tier 3: Venv Service ─────────────────────────────────────────────
     print("\n  --- Tier 3: Venv Service ---\n")

@@ -26,7 +26,8 @@ via WTB and forks from shared prefixes to avoid redundant computation.
 Run::
 
     python -m uct_engine.examples.rag_pipeline_search                     # simulated
-    python -m uct_engine.examples.rag_pipeline_search --real              # real pipeline
+    python -m uct_engine.examples.rag_pipeline_search --real              # real pipeline (sample_data)
+    python -m uct_engine.examples.rag_pipeline_search --data-dir /data1/ragworkspace/dataset  # real datasets
     python -m uct_engine.examples.rag_pipeline_search --wtb-reuse         # with WTB reuse
 """
 
@@ -335,35 +336,25 @@ def _build_alce_graph_factory(choices: tuple[str, ...], components: dict):
 
 
 def _evaluate_frozen(frozen_sample: list, benchmark: str, choices: tuple[str, ...]) -> float:
-    """Evaluate a frozen BenchmarkItem sample with the full pipeline when possible."""
+    """Evaluate a frozen BenchmarkItem sample with the full pipeline when possible.
+
+    Supports two item formats:
+
+    * **BenchmarkItem objects** (from ``SamplingEngine`` / HuggingFace) --
+      converted to eval dicts using ``payload`` / ``target`` / ``metadata``.
+    * **Plain eval dicts** (from ``build_frozen_samples_real``) --
+      already carry ``question``, ``answer``, ``context_results``, etc.
+      These are passed through directly.
+    """
     try:
         if benchmark == "hotpotqa":
             from benchmark.hotpotqa_adapter import HotpotQABenchmarkAdapter
-            eval_items = []
-            all_chunks: dict = {}
-            for bitem in frozen_sample:
-                p = bitem.payload
-                chunks = {}
-                for idx, (title, sents) in enumerate(
-                    zip(p.get("context_titles", []), p.get("context_sentences", []))
-                ):
-                    chunk_id = f"c{bitem.item_id}_{idx}"
-                    chunk_data = {"content": f"[{title}] " + " ".join(sents), "doc_ids": [title]}
-                    chunks[chunk_id] = chunk_data
-                    all_chunks[chunk_id] = chunk_data
-                eval_items.append({
-                    "question": p["question"], "answer": bitem.target["answer"],
-                    "query_id": bitem.item_id, "chunks": chunks,
-                })
-
-            corpus = _load_corpus_for_benchmark(benchmark, all_chunks)
-            components = build_pipeline_from_config(choices, benchmark, corpus=corpus)
-            generation = components.get("generation")
+            eval_items = _frozen_to_eval_items_hotpotqa(frozen_sample)
+            generation, graph = _try_build_pipeline(eval_items, choices, benchmark)
             if generation is None:
                 return DEFAULT_REWARD
 
             adapter = HotpotQABenchmarkAdapter()
-            graph = _build_eval_graph(choices, components)
             if graph is not None:
                 result = adapter.evaluate_pipeline(eval_items, graph)
             else:
@@ -372,32 +363,12 @@ def _evaluate_frozen(frozen_sample: list, benchmark: str, choices: tuple[str, ..
 
         elif benchmark == "ultradomain":
             from benchmark.ultradomain_adapter import UltraDomainBenchmarkAdapter
-            eval_items = []
-            all_chunks: dict = {}
-            for bitem in frozen_sample:
-                ctx = (bitem.payload.get("context") or "")[:3000]
-                domain = bitem.metadata.get("domain", "unknown")
-                chunk_id = f"c{bitem.item_id}"
-                if ctx:
-                    chunk_data = {"content": ctx, "doc_ids": [domain]}
-                    all_chunks[chunk_id] = chunk_data
-                    chunks = {chunk_id: chunk_data}
-                else:
-                    chunks = {}
-                eval_items.append({
-                    "question": bitem.payload.get("query") or "",
-                    "answer": bitem.target.get("answer") or "",
-                    "domain": domain, "query_id": bitem.item_id, "chunks": chunks,
-                })
-
-            corpus = _load_corpus_for_benchmark(benchmark, all_chunks)
-            components = build_pipeline_from_config(choices, benchmark, corpus=corpus)
-            generation = components.get("generation")
+            eval_items = _frozen_to_eval_items_ultradomain(frozen_sample)
+            generation, graph = _try_build_pipeline(eval_items, choices, benchmark)
             if generation is None:
                 return DEFAULT_REWARD
 
             adapter = UltraDomainBenchmarkAdapter()
-            graph = _build_eval_graph(choices, components)
             if graph is not None:
                 result = adapter.evaluate_pipeline(eval_items, graph)
             else:
@@ -434,6 +405,103 @@ def _evaluate_frozen(frozen_sample: list, benchmark: str, choices: tuple[str, ..
     return DEFAULT_REWARD
 
 
+def _try_build_pipeline(eval_items, choices, benchmark):
+    """Build pipeline components, falling back to generation-only on error.
+
+    When real data carries ``context_results``, retrieval is unnecessary --
+    ``get_context_for_item()`` in the adapter will use those directly.
+    Returns ``(generation, graph)``; *graph* may be ``None``.
+    """
+    try:
+        all_chunks = _collect_chunks(eval_items)
+        corpus = _load_corpus_for_benchmark(benchmark, all_chunks or None)
+        components = build_pipeline_from_config(choices, benchmark, corpus=corpus)
+        generation = components.get("generation")
+        graph = _build_eval_graph(choices, components)
+        return generation, graph
+    except Exception:
+        pass
+    # Retrieval / reranking may fail (missing deps), but generation might work
+    try:
+        gen_name = choices[-1] if choices else "simple_llm"
+        if gen_name == "longrag_reader":
+            generation = _build_longrag_generation()
+        elif gen_name == "simple_llm":
+            from rag_contracts.common_components import SimpleLLMGeneration
+            generation = SimpleLLMGeneration(llm=_build_simple_llm())
+        elif gen_name == "selfrag_generator":
+            _, generation = _build_selfrag_components()
+        else:
+            from rag_contracts.identity import IdentityGeneration
+            generation = IdentityGeneration()
+        return generation, None
+    except Exception:
+        return None, None
+
+
+def _is_plain_dict(item) -> bool:
+    """True when *item* is a plain eval dict (from ``load_*_real``)."""
+    return isinstance(item, dict) and "question" in item
+
+
+def _frozen_to_eval_items_hotpotqa(frozen_sample: list) -> list[dict]:
+    """Convert frozen sample to HotpotQA eval dicts.
+
+    Plain dicts (from ``load_hotpotqa_real``) are passed through unchanged.
+    BenchmarkItem objects are converted using their ``payload`` / ``target``.
+    """
+    eval_items: list[dict] = []
+    for bitem in frozen_sample:
+        if _is_plain_dict(bitem):
+            eval_items.append(bitem)
+            continue
+        p = bitem.payload
+        chunks: dict = {}
+        for idx, (title, sents) in enumerate(
+            zip(p.get("context_titles", []), p.get("context_sentences", []))
+        ):
+            chunk_id = f"c{bitem.item_id}_{idx}"
+            chunk_data = {"content": f"[{title}] " + " ".join(sents), "doc_ids": [title]}
+            chunks[chunk_id] = chunk_data
+        eval_items.append({
+            "question": p["question"], "answer": bitem.target["answer"],
+            "query_id": bitem.item_id, "chunks": chunks,
+        })
+    return eval_items
+
+
+def _frozen_to_eval_items_ultradomain(frozen_sample: list) -> list[dict]:
+    """Convert frozen sample to UltraDomain eval dicts."""
+    eval_items: list[dict] = []
+    for bitem in frozen_sample:
+        if _is_plain_dict(bitem):
+            eval_items.append(bitem)
+            continue
+        ctx = (bitem.payload.get("context") or "")[:3000]
+        domain = bitem.metadata.get("domain", "unknown")
+        chunk_id = f"c{bitem.item_id}"
+        if ctx:
+            chunk_data = {"content": ctx, "doc_ids": [domain]}
+            chunks = {chunk_id: chunk_data}
+        else:
+            chunks = {}
+        eval_items.append({
+            "question": bitem.payload.get("query") or "",
+            "answer": bitem.target.get("answer") or "",
+            "domain": domain, "query_id": bitem.item_id, "chunks": chunks,
+        })
+    return eval_items
+
+
+def _collect_chunks(eval_items: list[dict]) -> dict:
+    """Aggregate all ``chunks`` dicts from eval items (for corpus building)."""
+    all_chunks: dict = {}
+    for item in eval_items:
+        for k, v in item.get("chunks", {}).items():
+            all_chunks[k] = v
+    return all_chunks
+
+
 def build_frozen_samples(budget: int = 30, seed: int = 42) -> dict[str, list]:
     """Pre-draw a frozen sample per cluster using SamplingEngine.
 
@@ -467,6 +535,43 @@ def build_frozen_samples(budget: int = 30, seed: int = 42) -> dict[str, list]:
         adapter = ALCEAdapter(str(alce_root), subsets=["asqa"])
         result = SamplingEngine(adapter=adapter, method="proportional", budget=budget, seed=seed).run()
         samples["alce"] = result.items
+
+    return samples
+
+
+def build_frozen_samples_real(
+    data_dir: str,
+    max_items: int = 30,
+    ud_domain: str = "mix",
+) -> dict[str, list]:
+    """Load real datasets from ``data_dir`` and wrap them as frozen eval dicts.
+
+    Unlike ``build_frozen_samples()`` (which uses HuggingFace parquet via
+    ``SamplingEngine``), this reads the raw JSON/JSONL files produced by the
+    new ``load_hotpotqa_real`` / ``load_ultradomain_real`` loaders and
+    returns plain eval-item dicts that ``_evaluate_frozen_real()`` consumes
+    directly.
+
+    Expected layout::
+
+        data_dir/
+          all_data/hotpotqa/hotpotqa.json
+          UltraDomain/mix.jsonl
+    """
+    from pathlib import Path
+    samples: dict[str, list] = {}
+
+    hotpotqa_dir = Path(data_dir) / "all_data" / "hotpotqa"
+    if hotpotqa_dir.exists():
+        from benchmark.hotpotqa_adapter import load_hotpotqa_real
+        items = load_hotpotqa_real(hotpotqa_dir, max_items=max_items)
+        samples["hotpotqa"] = items
+
+    ud_dir = Path(data_dir) / "UltraDomain"
+    if ud_dir.exists():
+        from benchmark.ultradomain_adapter import load_ultradomain_real
+        items = load_ultradomain_real(ud_dir, domain=ud_domain, max_items=max_items)
+        samples["ultradomain"] = items
 
     return samples
 
@@ -671,23 +776,45 @@ def _build_wtb_evaluator(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    from pathlib import Path as _PP
+    _env = _PP(__file__).resolve().parents[3] / ".env"
+    if _env.exists():
+        from dotenv import load_dotenv
+        load_dotenv(_env)
+
     import argparse
     parser = argparse.ArgumentParser(description="AG-UCT RAG pipeline search")
     parser.add_argument("--real", action="store_true", help="Use real pipeline evaluation (sample_data)")
     parser.add_argument("--use-hf", action="store_true",
                         help="Use HuggingFace datasets via SamplingEngine (implies --real)")
+    parser.add_argument("--data-dir", type=str, default=None,
+                        help="Path to real dataset root (e.g. /data1/ragworkspace/dataset). "
+                             "Loads HotpotQA and UltraDomain from raw JSON/JSONL. Implies --real.")
+    parser.add_argument("--ud-domain", type=str, default="mix",
+                        help="UltraDomain domain file to load when --data-dir is set (default: mix)")
     parser.add_argument("--wtb-reuse", action="store_true",
                         help="Use WTB cache-aware evaluator with bipartite reuse ledger")
     parser.add_argument("--budget", type=int, default=30,
-                        help="Per-cluster sample budget when --use-hf is set (default: 30)")
+                        help="Per-cluster sample budget (default: 30)")
     parser.add_argument("--max-iterations", type=int, default=500)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    use_real = args.real or args.use_hf
+    use_real = args.real or args.use_hf or args.data_dir is not None
     frozen_samples: dict[str, list] | None = None
 
-    if args.use_hf:
+    if args.data_dir is not None:
+        print(f"Loading real datasets from {args.data_dir} ...", flush=True)
+        frozen_samples = build_frozen_samples_real(
+            data_dir=args.data_dir,
+            max_items=args.budget,
+            ud_domain=args.ud_domain,
+        )
+        for cid, items in frozen_samples.items():
+            print(f"  {cid}: {len(items)} items", flush=True)
+        if not frozen_samples:
+            print("  WARNING: No real datasets found. Falling back to sample_data.", flush=True)
+    elif args.use_hf:
         print("Building frozen HF samples ...", flush=True)
         frozen_samples = build_frozen_samples(budget=args.budget, seed=args.seed)
         for cid, items in frozen_samples.items():

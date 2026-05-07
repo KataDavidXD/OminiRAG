@@ -15,8 +15,10 @@ from typing import Any, Callable, Optional
 from rag_contracts import GenerationResult, RetrievalResult
 
 from benchmark.base_adapter import (
+    get_context_for_item,
     invoke_graph_sync,
     sample_chunks_to_retrieval_results,
+    ultradomain_context_to_retrieval_results,
 )
 from bsamp.scoring import (
     UltraDomainEvaluator,
@@ -34,6 +36,7 @@ __all__ = [
     "compute_f1",
     "load_ultradomain_sample",
     "load_ultradomain_jsonl",
+    "load_ultradomain_real",
     "sample_chunks_to_retrieval_results",
     "UltraDomainEvaluationResult",
     "UltraDomainBenchmarkAdapter",
@@ -82,6 +85,65 @@ def load_ultradomain_jsonl(path: str | Path) -> list[dict]:
     return items
 
 
+def load_ultradomain_real(
+    data_dir: str | Path,
+    *,
+    domain: str = "mix",
+    max_items: int | None = None,
+    max_chunk_chars: int = 4000,
+) -> list[dict]:
+    """Load real UltraDomain dataset from ``/data1/ragworkspace/dataset/UltraDomain``.
+
+    Expects JSONL files like ``agriculture.jsonl``, ``cs.jsonl``, ``legal.jsonl``,
+    ``mix.jsonl``, etc.  Each line is a JSON object with ``question``,
+    ``context`` (long string), and optionally ``answer``.
+
+    Each item is normalised into the format expected by ``evaluate_generation``,
+    with ``context_results`` pre-built via ``ultradomain_context_to_retrieval_results``.
+    """
+    data_dir = Path(data_dir)
+
+    candidates = [
+        data_dir / f"{domain}.jsonl",
+        data_dir / f"{domain}.json",
+    ]
+    src: Path | None = None
+    for c in candidates:
+        if c.exists():
+            src = c
+            break
+    if src is None:
+        raise FileNotFoundError(
+            f"No UltraDomain file for domain '{domain}' in {data_dir}. "
+            f"Tried: {[str(c) for c in candidates]}"
+        )
+
+    items: list[dict] = []
+    with open(src, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            entry = json.loads(line)
+            context_str = entry.get("context", "")
+            question = entry.get("question") or entry.get("input", "")
+            answers_raw = entry.get("answer") or entry.get("answers", [])
+            if isinstance(answers_raw, list):
+                answer = answers_raw[0] if answers_raw else ""
+            else:
+                answer = str(answers_raw)
+            items.append({
+                "question": question,
+                "answer": answer,
+                "domain": domain,
+                "query_id": entry.get("_id", entry.get("id", "")),
+                "context_results": ultradomain_context_to_retrieval_results(
+                    context_str, max_chunk_chars=max_chunk_chars,
+                ),
+            })
+            if max_items is not None and len(items) >= max_items:
+                break
+    return items
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -128,8 +190,7 @@ class UltraDomainBenchmarkAdapter:
         for item in data:
             question = item["question"]
             domain = item.get("domain", "general")
-            chunks = item.get("chunks", {})
-            context = sample_chunks_to_retrieval_results(chunks)
+            context = get_context_for_item(item)
 
             gen_result: GenerationResult = generation.generate(
                 query=question,

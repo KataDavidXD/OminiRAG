@@ -18,6 +18,8 @@ from typing import Any
 from rag_contracts import GenerationResult, RetrievalResult
 
 from benchmark.base_adapter import (
+    get_context_for_item,
+    hotpotqa_context_to_retrieval_results,
     invoke_graph_sync,
     sample_chunks_to_retrieval_results,
 )
@@ -39,6 +41,7 @@ __all__ = [
     "compute_exact",
     "load_hotpotqa_sample",
     "load_hotpotqa_jsonl",
+    "load_hotpotqa_real",
     "sample_chunks_to_retrieval_results",
     "HotpotQAEvaluationResult",
     "HotpotQABenchmarkAdapter",
@@ -91,6 +94,57 @@ def load_hotpotqa_jsonl(path: str | Path) -> list[dict]:
     return items
 
 
+def load_hotpotqa_real(
+    data_dir: str | Path,
+    *,
+    split: str = "train",
+    max_items: int | None = None,
+) -> list[dict]:
+    """Load real HotpotQA dataset from ``/data1/ragworkspace/dataset/all_data/hotpotqa``.
+
+    Expects ``hotpotqa_<split>.json`` — a JSON file containing a list of dicts,
+    each with ``question``, ``answer``, ``context`` (list of [title, [sents]]),
+    ``type``, ``level``, and ``_id``.
+
+    Each item is normalised into the format expected by ``evaluate_generation``,
+    with ``context_results`` pre-built via ``hotpotqa_context_to_retrieval_results``.
+    """
+    data_dir = Path(data_dir)
+
+    candidates = [
+        data_dir / f"hotpotqa_{split}.json",
+        data_dir / f"{split}.json",
+        data_dir / "hotpotqa.json",
+    ]
+    src: Path | None = None
+    for c in candidates:
+        if c.exists():
+            src = c
+            break
+    if src is None:
+        raise FileNotFoundError(
+            f"No HotpotQA JSON found in {data_dir}. "
+            f"Tried: {[str(c) for c in candidates]}"
+        )
+
+    with open(src, encoding="utf-8") as f:
+        raw: list[dict] = json.load(f)
+
+    if max_items is not None:
+        raw = raw[:max_items]
+
+    items: list[dict] = []
+    for entry in raw:
+        context_raw = entry.get("context", [])
+        items.append({
+            "question": entry["question"],
+            "answer": entry.get("answer", ""),
+            "query_id": entry.get("_id", ""),
+            "type": entry.get("type", ""),
+            "level": entry.get("level", ""),
+            "context_results": hotpotqa_context_to_retrieval_results(context_raw),
+        })
+    return items
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -128,8 +182,7 @@ class HotpotQABenchmarkAdapter:
 
         for item in data:
             question = item["question"]
-            chunks = item.get("chunks", {})
-            context = sample_chunks_to_retrieval_results(chunks)
+            context = get_context_for_item(item)
 
             gen_result: GenerationResult = generation.generate(
                 query=question,

@@ -1,9 +1,64 @@
 [project]
 name = "ominirag"
 version = "0.1.0"
-description = "Add your description here"
+description = "Modular cross-project RAG component swap framework"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "bsamp @ file:Benchmark_Sampling",
+    "bsamp",
+    # --- core pipeline ---
+    "langgraph>=1.1",
+    "langgraph-checkpoint>=4.0",
+    "openai>=2.0",
+    "python-dotenv>=1.0",
+    "numpy>=2.0",
+    # --- utility retrieval ---
+    "ddgs>=9.0",
+]
+
+[project.optional-dependencies]
+wtb = [
+    "wtb",
+    "langgraph-checkpoint-sqlite>=3.0",
+    "sqlalchemy>=2.0",
+]
+ray = [
+    "ray>=2.0",
+]
+benchmark = [
+    "tqdm>=4.60",
+    "rouge-score>=0.1",
+    "nltk>=3.8",
+    "scikit-learn>=1.0",
+    "sentence-transformers>=2.0",
+    "transformers>=4.30",
+    "pyyaml>=6.0",
+    "torch>=2.0",
+]
+test = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+all = [
+    "ominirag[wtb,ray,benchmark,test]",
+]
+
+[tool.uv.sources]
+bsamp = { path = "Benchmark_Sampling" }
+wtb = { path = "wtb-0.2.3-py3-none-any.whl" }
+
+[tool.setuptools.packages.find]
+include = [
+    "rag_contracts",
+    "rag_contracts.*",
+    "longRAG_example",
+    "longRAG_example.*",
+    "lightrag_langgraph",
+    "lightrag_langgraph.*",
+    "benchmark",
+    "benchmark.*",
+    "ominirag_wtb",
+    "ominirag_wtb.*",
+    "demos",
+    "demos.*",
 ]
