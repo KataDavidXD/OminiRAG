@@ -815,3 +815,204 @@ graph = build_graph(
 ```
 
 No other code changes required. The protocol contract guarantees compatibility.
+
+---
+
+## Experiment Setup & Running
+
+### Data Layout
+
+| Dataset | Path | Description |
+|---------|------|-------------|
+| **HotpotQA (fullwiki)** | `/data1/ragworkspace/train/fullwiki/` | 500 QA items + 4932-doc corpus |
+| HotpotQA corpus index | `data/corpus_indexes/fullwiki_corpus_index.json` | 4939 BM25-ready chunks |
+| HotpotQA KG graph | `/data1/ragworkspace/train/fullwiki/graph/` | 41k nodes, 46k edges |
+| **UltraDomain** | `/data1/ragworkspace/train/ultradomain/` | Agriculture/CS/Legal + mix |
+| UltraDomain KG graph | `/data1/ragworkspace/train/ultradomain/graph/` | 148k nodes, 235k edges |
+
+### Prerequisites
+
+```bash
+# 0. Install dependencies (torch + sentence_transformers needed for dense/selfrag)
+uv pip install torch --index-url https://download.pytorch.org/whl/cu128
+uv pip install sentence-transformers -i https://mirrors.aliyun.com/pypi/simple/
+
+# 1. Build CorpusIndex from raw fullwiki corpus (one-time, ~1s)
+.venv/bin/python scripts/build_corpus_index.py --smoke-test
+
+# 2. Convert LightRAG graph data to JSON store format (one-time, ~25s)
+.venv/bin/python scripts/prepare_lightrag_stores.py --all
+
+# 3. Build stratified search/test sets (one-time, ~5s with --skip-eval)
+.venv/bin/python scripts/build_stratified_search_set.py --skip-eval
+
+# 4. Verify system is working (14s, no LLM needed)
+.venv/bin/python scripts/run_system_test.py --uct-iters 3 --cache-test
+
+# 5. Run pre-experiment checklist (full check, no flags)
+CUDA_VISIBLE_DEVICES=4 HF_ENDPOINT=https://hf-mirror.com \
+  .venv/bin/python scripts/pre_experiment_check.py
+
+# 6. (Optional) Launch Self-RAG vLLM on a free GPU
+bash scripts/launch_selfrag_vllm.sh 4 8002
+export SELFRAG_VLLM_URL=http://localhost:8002/v1
+```
+
+> **GPU note**: `CUDA_VISIBLE_DEVICES=4` directs model loading to GPU 4 (or whichever
+> GPU is free). `HF_ENDPOINT=https://hf-mirror.com` routes HuggingFace model downloads
+> through a reachable mirror. Adjust as needed for your environment.
+>
+> **Resource safety**: The pre-experiment check gracefully releases all models and GPU
+> memory after each check via `del` + `gc.collect()` + `torch.cuda.empty_cache()`.
+> It never kills external processes or touches other users' GPU allocations.
+
+**Environment**: Python 3.12 (.venv), torch 2.11+cu130, sentence_transformers 5.4.
+For Chinese mirrors: `uv pip install <pkg> -i https://mirrors.aliyun.com/pypi/simple/`
+
+### Running Experiments
+
+```bash
+# UCT smoke test (simulated rewards, instant)
+bash scripts/run_uct_search.sh --smoke
+
+# UCT with real evaluation (needs LLM endpoint in .env)
+bash scripts/run_uct_search.sh --real-quick     # 5 iters, budget=5
+bash scripts/run_uct_search.sh --full            # 500 iters, budget=30
+
+# UCT with WTB cache-aware evaluator
+bash scripts/run_uct_search.sh --wtb
+
+# Baseline preset evaluation
+.venv/bin/python scripts/run_baseline_eval.py --max-items 10        # quick test
+.venv/bin/python scripts/run_baseline_eval.py --max-items 500 --output results/baselines.json
+
+# Per-dimension ablation
+.venv/bin/python scripts/run_ablation.py --max-items 50 --output results/ablation.json
+```
+
+### Time Estimates
+
+| Experiment | Budget | Iterations | Est. Time |
+|------------|--------|------------|-----------|
+| UCT smoke (simulated) | - | 5 | <1s |
+| UCT real quick | 5 | 5 | ~4 min |
+| UCT full search | 30 | 500 | ~20-40 hours |
+| Baseline (3 presets) | 500 | - | ~3-4 hours |
+| Ablation (5 dims × options) | 50 | - | ~5-10 hours |
+
+### Cache Verification
+
+The system test includes cache reuse verification. Run with `--cache-test` to confirm that materialized prefix keys persist across UCT iterations:
+
+```bash
+.venv/bin/python scripts/run_system_test.py --cache-test
+```
+
+This verifies that the `SearchContext.materialized_keys` set correctly tracks which `(config_prefix, dataset)` pairs have been evaluated, reducing marginal cost for configs sharing prefixes with previously seen configs.
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_API_KEY` | (from .env) | API key for LLM endpoint |
+| `LLM_BASE_URL` | (from .env) | OpenAI-compatible API endpoint |
+| `DEFAULT_LLM` | `gpt-4o-mini` | Model name for generation |
+| `SELFRAG_VLLM_URL` | - | Self-RAG vLLM endpoint (optional) |
+| `OMINIRAG_DATA_ROOT` | `/data1/ragworkspace/train` | Root for dataset directories |
+| `LIGHTRAG_WORKING_DIR` | auto-resolved | Override LightRAG store directory |
+
+### Scripts Reference
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/build_corpus_index.py` | Build BM25/Dense/Hybrid CorpusIndex from raw corpus |
+| `scripts/prepare_lightrag_stores.py` | Convert GraphML + KV stores to simplified JSON format |
+| `scripts/run_system_test.py` | End-to-end system verification (8 tests) |
+| `scripts/run_baseline_eval.py` | Evaluate framework presets on HotpotQA |
+| `scripts/run_ablation.py` | Per-dimension ablation study |
+| `scripts/run_uct_search.sh` | AG-UCT search with various modes |
+| `scripts/launch_selfrag_vllm.sh` | Deploy Self-RAG on vLLM |
+| `scripts/build_stratified_search_set.py` | Neyman two-phase stratified sampling for search/test sets |
+| `scripts/collect_uct_stats.py` | UCT statistics collection and full-dataset comparison |
+| `scripts/cache_visualizer.py` | Real-time bipartite cache visualizer (Flask + D3.js) |
+| `scripts/pre_experiment_check.py` | Pre-experiment readiness validation (9 checks) |
+
+### Stratified Sampling
+
+The search set is built using Neyman two-phase optimal allocation to ensure
+representative coverage of question difficulty strata:
+
+```bash
+# Build stratified search (400 items) + test (500 items) sets
+# Pilot phase estimates per-stratum variance, then Neyman-allocates the rest
+.venv/bin/python scripts/build_stratified_search_set.py --hotpotqa-budget 400 --seed 42
+
+# Skip pilot eval (use uniform variance -- faster, for testing)
+.venv/bin/python scripts/build_stratified_search_set.py --skip-eval
+```
+
+**HotpotQA strata**: 7 strata by (type x level) -- bridge/comparison crossed with easy/medium/hard.
+**UltraDomain strata**: 4 strata by domain -- agriculture, cs, legal, mix.
+
+Output files:
+- `/data1/ragworkspace/train/fullwiki/fullwiki_search_400_stratified.json`
+- `/data1/ragworkspace/train/fullwiki/fullwiki_test_500.json`
+- `/data1/ragworkspace/train/ultradomain/ultradomain_search_stratified.json`
+- `/data1/ragworkspace/train/ultradomain/ultradomain_test_all.json`
+
+### UCT Search with Stratified Data
+
+```bash
+# Run UCT with the pre-built stratified search set and save the tree
+PYTHONPATH=AG-UCT:Benchmark_Sampling:A-Simplified-Core-Workflow-for-Enhancing-RAG:. \
+.venv/bin/python -m uct_engine.examples.rag_pipeline_search \
+    --real --search-set /data1/ragworkspace/train/fullwiki/fullwiki_search_400_stratified.json \
+    --max-iterations 500 --save-tree results/search_tree.json --output-stats results/search_stats.json
+```
+
+### UCT Statistics & Comparison
+
+After running UCT, compare the best config against baselines on the full test set:
+
+```bash
+# Print tree stats + evaluate UCT-best vs baselines on 500 items
+.venv/bin/python scripts/collect_uct_stats.py \
+    --tree results/search_tree.json --max-items 500 \
+    --baselines bm25_simple longrag --output results/uct_comparison.json
+
+# Just print tree stats without re-evaluating
+.venv/bin/python scripts/collect_uct_stats.py --tree results/search_tree.json --skip-eval
+```
+
+### Cache Visualizer
+
+Monitor the bipartite reuse graph in real time during UCT search:
+
+```bash
+# Start the visualizer (reads the same DB the UCT search writes to)
+.venv/bin/python scripts/cache_visualizer.py --db /tmp/wtb_reuse_*/reuse_ledger.db --port 5050
+# Open http://localhost:5050 in a browser
+```
+
+Features: bipartite graph (prefix <-> question), stats panel, depth heatmap, auto-refresh every 2s.
+
+### Pre-Experiment Check
+
+Validate system readiness before the final experiment run:
+
+```bash
+# Full check (recommended -- includes LLM ping and 1-item smoke test)
+CUDA_VISIBLE_DEVICES=4 HF_ENDPOINT=https://hf-mirror.com \
+  .venv/bin/python scripts/pre_experiment_check.py
+
+# Skip network-dependent checks (for offline debugging only)
+.venv/bin/python scripts/pre_experiment_check.py --skip-llm --skip-smoke
+```
+
+Checks: data files, stratified sets, LLM endpoint, pipeline builds (4 presets),
+1-item smoke test, cache round-trip, disk space, vLLM (optional), GPU status (optional).
+
+**Resource safety**: After each pipeline-build and smoke-test check, the script
+releases all loaded models and GPU memory (`del` + `gc.collect()` +
+`torch.cuda.empty_cache()`). Only process-local resources are freed -- other
+users' processes and GPU allocations are never affected.

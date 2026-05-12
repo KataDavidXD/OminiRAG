@@ -57,8 +57,8 @@ def build_simple_llm() -> Any:
         def __init__(self):
             from openai import OpenAI
             base = os.environ.get("LLM_BASE_URL") or os.environ.get("OPENAI_API_BASE", "")
-            self.client = OpenAI(api_key=api_key, base_url=base or None)
-            self.model = os.environ.get("DEFAULT_LLM", "gpt-4o-mini")
+            self.client = OpenAI(api_key=api_key, base_url=base or None, timeout=60.0)
+            self.model = os.environ.get("DEFAULT_LLM", "gpt-5-mini")
 
         def complete(self, system, user, **kw):
             resp = self.client.chat.completions.create(
@@ -68,7 +68,7 @@ def build_simple_llm() -> Any:
                     {"role": "user", "content": user},
                 ],
                 temperature=kw.get("temperature", 0.1),
-                max_tokens=kw.get("max_tokens", 300),
+                max_tokens=kw.get("max_tokens", 2000),
             )
             return (resp.choices[0].message.content or "").strip()
 
@@ -482,6 +482,35 @@ class _RealPrediction:
         self.outputs = [output]
 
 
+_LIGHTRAG_GRAPH_DIRS: dict[str, str] = {
+    "hotpotqa": "/data1/ragworkspace/train/fullwiki/graph",
+    "ultradomain": "/data1/ragworkspace/train/ultradomain/graph",
+}
+
+
+def _resolve_lightrag_working_dir(benchmark: str) -> str | None:
+    """Resolve the LightRAG store directory for a benchmark."""
+    import os
+    from pathlib import Path
+
+    env_dir = os.environ.get("LIGHTRAG_WORKING_DIR")
+    if env_dir and Path(env_dir).exists():
+        return env_dir
+
+    data_root = os.environ.get("OMINIRAG_DATA_ROOT", "/data1/ragworkspace/train")
+    benchmark_map = {
+        "hotpotqa": f"{data_root}/fullwiki/graph",
+        "ultradomain": f"{data_root}/ultradomain/graph",
+    }
+    candidate = benchmark_map.get(benchmark)
+    if candidate and Path(candidate).exists():
+        required = ["graph.json", "chunks.json", "vdb_chunks.json"]
+        if all((Path(candidate) / f).exists() for f in required):
+            return candidate
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Main pipeline builder
 # ---------------------------------------------------------------------------
@@ -526,10 +555,12 @@ def build_pipeline_from_config(
 
     components: dict[str, Any] = {"chunking": chunking_name}
 
+    lightrag_wd = _resolve_lightrag_working_dir(benchmark)
+
     # -- Query --
     if query_name == "lightrag_keywords":
         from lightrag_langgraph.adapters import LightRAGQuery
-        components["query"] = LightRAGQuery()
+        components["query"] = LightRAGQuery(working_dir=lightrag_wd)
     else:
         components["query"] = IdentityQuery()
 
@@ -543,7 +574,9 @@ def build_pipeline_from_config(
     elif retrieval_name in ("lightrag_hybrid", "lightrag_graph"):
         from lightrag_langgraph.adapters import LightRAGRetrieval
         mode_map = {"lightrag_hybrid": "hybrid", "lightrag_graph": "graph"}
-        components["retrieval"] = LightRAGRetrieval(mode=mode_map[retrieval_name])
+        components["retrieval"] = LightRAGRetrieval(
+            mode=mode_map[retrieval_name], working_dir=lightrag_wd,
+        )
     else:
         components["retrieval"] = BM25Retrieval(corpus=corpus)
 
@@ -554,7 +587,7 @@ def build_pipeline_from_config(
         components["post_retrieval"] = CrossEncoderReranking()
     elif post_ret_name == "lightrag_compress":
         from lightrag_langgraph.adapters import LightRAGReranking
-        components["post_retrieval"] = LightRAGReranking()
+        components["post_retrieval"] = LightRAGReranking(working_dir=lightrag_wd)
     elif post_ret_name == "selfrag_critique":
         selfrag_rr, _ = build_selfrag_components()
         components["post_retrieval"] = selfrag_rr if selfrag_rr else IdentityReranking()
@@ -566,7 +599,7 @@ def build_pipeline_from_config(
         components["generation"] = build_longrag_generation()
     elif generation_name == "lightrag_answer":
         from lightrag_langgraph.adapters import LightRAGGeneration
-        components["generation"] = LightRAGGeneration()
+        components["generation"] = LightRAGGeneration(working_dir=lightrag_wd)
     elif generation_name == "selfrag_generator":
         _, selfrag_gen = build_selfrag_components()
         components["generation"] = selfrag_gen if selfrag_gen else IdentityGeneration()

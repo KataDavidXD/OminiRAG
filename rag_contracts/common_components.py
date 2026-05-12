@@ -162,11 +162,11 @@ class SimpleLLMGeneration:
             f"[{i+1}] {r.title}\n{r.content}" for i, r in enumerate(context[:5])
         )
         answer = self.llm.complete(
-            "You are an expert reader. Extract the answer from the provided context. "
-            "Be concise and precise. If the answer is a short entity, return just that.",
+            "You are a precise QA system. Given the context, output ONLY the answer "
+            "entity or phrase. No explanation, no reasoning, just the answer.",
             f"Context:\n{ctx_text}\n\nQuestion: {query}\n\nAnswer:",
             temperature=0.1,
-            max_tokens=300,
+            max_tokens=2000,
         )
         return GenerationResult(
             output=answer.strip(),

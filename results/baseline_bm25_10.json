@@ -1,0 +1,17 @@
+[
+  {
+    "preset": "bm25_simple",
+    "name": "BM25 + SimpleLLM (minimal baseline)",
+    "config": [
+      "standard_passage",
+      "identity",
+      "bm25",
+      "identity",
+      "simple_llm"
+    ],
+    "avg_em": 70.0,
+    "avg_f1": 76.66666666666667,
+    "num_items": 10,
+    "elapsed_s": 203.7
+  }
+]

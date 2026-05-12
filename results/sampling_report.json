@@ -1,0 +1,80 @@
+[
+  {
+    "benchmark": "hotpotqa",
+    "total_population": 500,
+    "search_budget": 400,
+    "pilot_budget": 50,
+    "pilot_allocation": {
+      "bridge_hard": 9,
+      "bridge_medium": 24,
+      "comparison_easy": 1,
+      "bridge_easy": 8,
+      "nan_nan": 2,
+      "comparison_hard": 2,
+      "comparison_medium": 4
+    },
+    "pilot_variances": {
+      "bridge_hard": 0.1,
+      "bridge_medium": 0.1,
+      "comparison_easy": 0.1,
+      "bridge_easy": 0.1,
+      "nan_nan": 0.1,
+      "comparison_hard": 0.1,
+      "comparison_medium": 0.1
+    },
+    "main_allocation": {
+      "bridge_hard": 63,
+      "bridge_medium": 161,
+      "comparison_easy": 11,
+      "bridge_easy": 49,
+      "nan_nan": 20,
+      "comparison_hard": 14,
+      "comparison_medium": 32
+    },
+    "final_distribution": {
+      "bridge_easy": 57,
+      "bridge_hard": 72,
+      "bridge_medium": 185,
+      "comparison_easy": 12,
+      "comparison_hard": 16,
+      "comparison_medium": 36,
+      "nan_nan": 22
+    },
+    "search_set_size": 400,
+    "test_set_size": 500,
+    "seed": 42
+  },
+  {
+    "benchmark": "ultradomain",
+    "total_population": 768,
+    "search_budget": 400,
+    "pilot_budget": 76,
+    "pilot_allocation": {
+      "agriculture": 10,
+      "cs": 9,
+      "legal": 44,
+      "mix": 13
+    },
+    "pilot_variances": {
+      "agriculture": 0.1,
+      "cs": 0.1,
+      "legal": 0.1,
+      "mix": 0.1
+    },
+    "main_allocation": {
+      "agriculture": 42,
+      "cs": 42,
+      "legal": 185,
+      "mix": 55
+    },
+    "final_distribution": {
+      "agriculture": 52,
+      "cs": 51,
+      "legal": 229,
+      "mix": 68
+    },
+    "search_set_size": 400,
+    "test_set_size": 768,
+    "seed": 42
+  }
+]

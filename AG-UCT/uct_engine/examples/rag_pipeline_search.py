@@ -187,21 +187,57 @@ from rag_contracts.component_registry import (  # noqa: E402
 )
 
 
+_CORPUS_CACHE: dict[str, "CorpusIndex"] = {}
+
+
 def _load_corpus_for_benchmark(benchmark: str, chunks: dict | None = None):
-    """Load a CorpusIndex for the given benchmark from sample_data or chunks dict."""
+    """Load a CorpusIndex for the given benchmark.
+
+    Priority: inline chunks > real corpus index > KG sample fallback.
+    Real corpus indexes are loaded once and cached for the process lifetime.
+    """
     from rag_contracts import CorpusIndex
     from pathlib import Path
+    import os
 
     if chunks:
         return CorpusIndex.from_chunks_dict(chunks)
 
-    chunks_paths = {
-        "hotpotqa": "benchmark/sample_data/hotpotqa_kg_sample/chunks.json",
-        "ultradomain": "benchmark/sample_data/ultradomain_kg_sample/chunks.json",
+    if benchmark in _CORPUS_CACHE:
+        return _CORPUS_CACHE[benchmark]
+
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    data_root = Path(os.environ.get("OMINIRAG_DATA_ROOT", "/data1/ragworkspace/train"))
+
+    real_paths = {
+        "hotpotqa": [
+            project_root / "data" / "corpus_indexes" / "fullwiki_corpus_index.json",
+            data_root / "fullwiki" / "fullwiki_corpus_index.json",
+        ],
+        "ultradomain": [
+            project_root / "data" / "corpus_indexes" / "ultradomain_mix_corpus_index.json",
+            data_root / "ultradomain" / "ultradomain_corpus_index.json",
+        ],
     }
-    path = chunks_paths.get(benchmark)
-    if path and Path(path).exists():
-        return CorpusIndex.from_json_file(path)
+    sample_paths = {
+        "hotpotqa": project_root / "benchmark" / "sample_data" / "hotpotqa_kg_sample" / "chunks.json",
+        "ultradomain": project_root / "benchmark" / "sample_data" / "ultradomain_kg_sample" / "chunks.json",
+    }
+
+    for p in real_paths.get(benchmark, []):
+        if p.exists():
+            corpus = CorpusIndex.from_json_file(p)
+            _CORPUS_CACHE[benchmark] = corpus
+            print(f"  [corpus] Loaded real index for {benchmark}: {len(corpus)} chunks from {p}", flush=True)
+            return corpus
+
+    sample = sample_paths.get(benchmark)
+    if sample and sample.exists():
+        corpus = CorpusIndex.from_json_file(sample)
+        _CORPUS_CACHE[benchmark] = corpus
+        print(f"  [corpus] Loaded sample index for {benchmark}: {len(corpus)} chunks", flush=True)
+        return corpus
+
     return None
 
 
@@ -552,28 +588,71 @@ def build_frozen_samples_real(
     returns plain eval-item dicts that ``_evaluate_frozen_real()`` consumes
     directly.
 
-    Expected layout::
+    Supported layouts::
 
         data_dir/
-          all_data/hotpotqa/hotpotqa.json
+          all_data/hotpotqa/hotpotqa.json    (original)
           UltraDomain/mix.jsonl
+
+        OR (fullwiki layout):
+
+        data_dir/
+          fullwiki/fullwiki_sample_500_uniform.parquet
+          ultradomain/mix.jsonl
     """
     from pathlib import Path
     samples: dict[str, list] = {}
 
     hotpotqa_dir = Path(data_dir) / "all_data" / "hotpotqa"
+    fullwiki_parquet = Path(data_dir) / "fullwiki" / "fullwiki_sample_500_uniform.parquet"
+
     if hotpotqa_dir.exists():
         from benchmark.hotpotqa_adapter import load_hotpotqa_real
         items = load_hotpotqa_real(hotpotqa_dir, max_items=max_items)
         samples["hotpotqa"] = items
+    elif fullwiki_parquet.exists():
+        items = _load_hotpotqa_parquet(fullwiki_parquet, max_items=max_items)
+        samples["hotpotqa"] = items
 
     ud_dir = Path(data_dir) / "UltraDomain"
+    ud_dir_alt = Path(data_dir) / "ultradomain"
     if ud_dir.exists():
         from benchmark.ultradomain_adapter import load_ultradomain_real
         items = load_ultradomain_real(ud_dir, domain=ud_domain, max_items=max_items)
         samples["ultradomain"] = items
+    elif ud_dir_alt.exists():
+        from benchmark.ultradomain_adapter import load_ultradomain_real
+        items = load_ultradomain_real(ud_dir_alt, domain=ud_domain, max_items=max_items)
+        samples["ultradomain"] = items
 
     return samples
+
+
+def _load_hotpotqa_parquet(path, max_items: int | None = None) -> list[dict]:
+    """Load HotpotQA items from the fullwiki parquet file."""
+    import pandas as pd
+    from benchmark.base_adapter import hotpotqa_context_to_retrieval_results
+
+    df = pd.read_parquet(path)
+    if max_items is not None:
+        df = df.head(max_items)
+
+    items: list[dict] = []
+    for _, row in df.iterrows():
+        context_raw = row.get("context", [])
+        if isinstance(context_raw, list) and context_raw:
+            context_results = hotpotqa_context_to_retrieval_results(context_raw)
+        else:
+            context_results = []
+        items.append({
+            "question": row["question"],
+            "answer": row["answer"],
+            "query_id": row.get("id", ""),
+            "type": row.get("type", ""),
+            "level": row.get("level", ""),
+            "context_results": context_results,
+        })
+    return items
 
 
 # ---------------------------------------------------------------------------
@@ -775,6 +854,86 @@ def _build_wtb_evaluator(
 # Main
 # ---------------------------------------------------------------------------
 
+def load_search_set(path: str) -> dict[str, list]:
+    """Load a pre-built stratified search set JSON into frozen_samples format.
+
+    The JSON is a list of dicts with ``question``, ``answer``, ``query_id``,
+    ``type``, ``level`` (HotpotQA) or ``_domain``, ``input``, ``answers`` (UltraDomain).
+    Auto-detects the benchmark from the data.
+    """
+    import json as _json
+    from pathlib import Path as _P
+
+    path_obj = _P(path)
+    with open(path_obj, "r", encoding="utf-8") as f:
+        items = _json.load(f)
+
+    if not items:
+        return {}
+
+    if "question" in items[0]:
+        eval_items = []
+        for entry in items:
+            eval_items.append({
+                "question": entry["question"],
+                "answer": entry["answer"],
+                "query_id": entry.get("id", ""),
+                "type": entry.get("type", ""),
+                "level": entry.get("level", ""),
+            })
+        return {"hotpotqa": eval_items}
+    elif "input" in items[0]:
+        eval_items = []
+        for entry in items:
+            eval_items.append({
+                "question": entry.get("input", ""),
+                "answer": (entry.get("answers", [""])[0]
+                           if isinstance(entry.get("answers"), list)
+                           else entry.get("answers", "")),
+                "query_id": entry.get("_id", ""),
+                "domain": entry.get("_domain", "unknown"),
+            })
+        return {"ultradomain": eval_items}
+
+    return {}
+
+
+def _serialize_tree(root_node, slot_names: list[str]) -> dict:
+    """Recursively serialize a TreeNode into a JSON-safe dict."""
+    configs_visited: list[dict] = []
+
+    def _collect(node, depth=0, prefix=()):
+        if depth == len(slot_names):
+            if node.visit_count > 0:
+                configs_visited.append({
+                    "config": {slot_names[i]: v for i, v in enumerate(prefix)},
+                    "config_tuple": list(prefix),
+                    "q_value": node.q_value,
+                    "visit_count": node.visit_count,
+                    "value_sum": node.value_sum,
+                    "best_value": node.best_value,
+                })
+            return
+        for act, ch in node.children.items():
+            _collect(ch, depth + 1, prefix + (str(act),))
+
+    _collect(root_node)
+    configs_visited.sort(key=lambda x: x["q_value"], reverse=True)
+
+    slot_breakdown = {}
+    for action, child in root_node.children.items():
+        slot_breakdown[str(action)] = {
+            "visit_count": child.visit_count,
+            "q_value": child.q_value,
+            "best_value": child.best_value,
+        }
+
+    return {
+        "slot_breakdown": slot_breakdown,
+        "configs_visited": configs_visited,
+    }
+
+
 def main() -> None:
     from pathlib import Path as _PP
     _env = _PP(__file__).resolve().parents[3] / ".env"
@@ -783,6 +942,8 @@ def main() -> None:
         load_dotenv(_env)
 
     import argparse
+    import json as _json
+
     parser = argparse.ArgumentParser(description="AG-UCT RAG pipeline search")
     parser.add_argument("--real", action="store_true", help="Use real pipeline evaluation (sample_data)")
     parser.add_argument("--use-hf", action="store_true",
@@ -790,6 +951,9 @@ def main() -> None:
     parser.add_argument("--data-dir", type=str, default=None,
                         help="Path to real dataset root (e.g. /data1/ragworkspace/dataset). "
                              "Loads HotpotQA and UltraDomain from raw JSON/JSONL. Implies --real.")
+    parser.add_argument("--search-set", type=str, default=None,
+                        help="Path to pre-built stratified search set JSON "
+                             "(from build_stratified_search_set.py). Implies --real.")
     parser.add_argument("--ud-domain", type=str, default="mix",
                         help="UltraDomain domain file to load when --data-dir is set (default: mix)")
     parser.add_argument("--wtb-reuse", action="store_true",
@@ -798,12 +962,23 @@ def main() -> None:
                         help="Per-cluster sample budget (default: 30)")
     parser.add_argument("--max-iterations", type=int, default=500)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--save-tree", type=str, default=None,
+                        help="Save search tree (node visits, Q-values, configs) to JSON file")
+    parser.add_argument("--output-stats", type=str, default=None,
+                        help="Save SearchResult summary to JSON file")
     args = parser.parse_args()
 
-    use_real = args.real or args.use_hf or args.data_dir is not None
+    use_real = args.real or args.use_hf or args.data_dir is not None or args.search_set is not None
     frozen_samples: dict[str, list] | None = None
 
-    if args.data_dir is not None:
+    if args.search_set is not None:
+        print(f"Loading stratified search set from {args.search_set} ...", flush=True)
+        frozen_samples = load_search_set(args.search_set)
+        for cid, items in frozen_samples.items():
+            print(f"  {cid}: {len(items)} items", flush=True)
+        if not frozen_samples:
+            print("  WARNING: Empty search set. Falling back to sample_data.", flush=True)
+    elif args.data_dir is not None:
         print(f"Loading real datasets from {args.data_dir} ...", flush=True)
         frozen_samples = build_frozen_samples_real(
             data_dir=args.data_dir,
@@ -888,6 +1063,39 @@ def main() -> None:
     for cfg, q, visits in configs_visited[:5]:
         label = ", ".join(f"{SLOT_NAMES[i]}={v}" for i, v in enumerate(cfg))
         print(f"    Q={q:.4f}  visits={visits:3d}  ({label})", flush=True)
+
+    if args.save_tree:
+        tree_path = _PP(args.save_tree)
+        tree_path.parent.mkdir(parents=True, exist_ok=True)
+        tree_data = _serialize_tree(result.root_node, SLOT_NAMES)
+        tree_data["best_config"] = list(result.best_state.state_key())
+        tree_data["best_reward"] = result.best_reward
+        tree_data["iterations"] = result.iterations
+        tree_data["total_evaluations"] = result.total_evaluations
+        tree_data["total_cost"] = result.total_cost
+        tree_data["materialized_keys_count"] = len(result.context.materialized_keys)
+        tree_data["search_space_size"] = total_configs
+        with open(tree_path, "w", encoding="utf-8") as f:
+            _json.dump(tree_data, f, ensure_ascii=False, indent=2)
+        print(f"\n  Search tree saved to {tree_path}", flush=True)
+
+    if args.output_stats:
+        stats_path = _PP(args.output_stats)
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+        stats = {
+            "best_config": list(result.best_state.state_key()),
+            "best_config_pretty": result.best_state.pretty(),
+            "best_reward": result.best_reward,
+            "iterations": result.iterations,
+            "total_evaluations": result.total_evaluations,
+            "total_cost": result.total_cost,
+            "materialized_keys_count": len(result.context.materialized_keys),
+            "search_space_size": total_configs,
+            "efficiency": result.total_evaluations / total_configs,
+        }
+        with open(stats_path, "w", encoding="utf-8") as f:
+            _json.dump(stats, f, ensure_ascii=False, indent=2)
+        print(f"  Search stats saved to {stats_path}", flush=True)
 
 
 if __name__ == "__main__":

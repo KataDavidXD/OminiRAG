@@ -28,10 +28,29 @@ if _LIGHTRAG_SRC not in sys.path:
     sys.path.insert(0, str(Path(_LIGHTRAG_SRC).parent))
 
 
+_LIGHTRAG_WORKING_DIR: str | None = None
+
+
+def set_lightrag_working_dir(path: str | None) -> None:
+    """Set the global LightRAG working directory for store files."""
+    global _LIGHTRAG_WORKING_DIR
+    _LIGHTRAG_WORKING_DIR = path
+
+
 def _get_config():
     """Lazy-import LightRAG Config to avoid import-time side effects."""
     from lightrag_core_simplified.src.config import Config
     return Config
+
+
+def _make_config(working_dir: str | None = None):
+    """Create a Config with optional working_dir override."""
+    Config = _get_config()
+    cfg = Config()
+    wd = working_dir or _LIGHTRAG_WORKING_DIR
+    if wd:
+        cfg.working_dir = wd
+    return cfg
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -52,11 +71,12 @@ class LightRAGQuery:
     """
 
     config: Any = None
+    working_dir: str | None = None
     _last_query_result: dict = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self):
         if self.config is None:
-            self.config = _get_config()()
+            self.config = _make_config(self.working_dir)
 
     def process(self, query: str, context: QueryContext) -> list[str]:
         from lightrag_core_simplified.src.modules import query_module
@@ -93,11 +113,12 @@ class LightRAGRetrieval:
 
     config: Any = None
     mode: str | None = None
+    working_dir: str | None = None
     _precomputed_query_result: dict | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         if self.config is None:
-            self.config = _get_config()()
+            self.config = _make_config(self.working_dir)
 
     def set_query_result(self, query_result: dict | None) -> None:
         """Inject a pre-computed query_module result to skip re-running it."""
@@ -183,10 +204,11 @@ class LightRAGReranking:
     """
 
     config: Any = None
+    working_dir: str | None = None
 
     def __post_init__(self):
         if self.config is None:
-            self.config = _get_config()()
+            self.config = _make_config(self.working_dir)
 
     def rerank(
         self, query: str, results: list[RetrievalResult], top_k: int = 10
@@ -229,10 +251,11 @@ class LightRAGGeneration:
     """
 
     config: Any = None
+    working_dir: str | None = None
 
     def __post_init__(self):
         if self.config is None:
-            self.config = _get_config()()
+            self.config = _make_config(self.working_dir)
 
     def generate(
         self,
